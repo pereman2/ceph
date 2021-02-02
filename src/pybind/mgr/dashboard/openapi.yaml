@@ -3331,8 +3331,10 @@ paths:
     put:
       description: "\n        Update the specified host.\n        Note, this is only\
         \ supported when Ceph Orchestrator is enabled.\n        :param hostname: The\
-        \ name of the host to be processed.\n        :param labels: List of labels.\n\
-        \        "
+        \ name of the host to be processed.\n        :param update_labels: To update\
+        \ the labels.\n        :param labels: List of labels.\n        :param maintenance:\
+        \ Enter/Exit maintenance mode.\n        :param force: Force enter maintenance\
+        \ mode.\n        "
       parameters:
       - in: path
         name: hostname
@@ -3344,10 +3346,17 @@ paths:
           application/json:
             schema:
               properties:
+                force:
+                  default: false
+                  type: boolean
                 labels:
                   type: string
-              required:
-              - labels
+                maintenance:
+                  default: false
+                  type: boolean
+                update_labels:
+                  default: false
+                  type: boolean
               type: object
       responses:
         '200':
