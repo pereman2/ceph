@@ -296,8 +296,13 @@ else
     case "$ID" in
     debian|ubuntu|devuan|elementary)
         echo "Using apt-get to install dependencies"
+        $SUDO apt install -y docker.io
+        $SUDO systemctl start docker
+        $SUDO systemctl enable docker
         $SUDO apt-get install -y devscripts equivs
         $SUDO apt-get install -y dpkg-dev
+        echo docker --version
+        $SUDO docker run hello-world
         ensure_python3_sphinx_on_ubuntu
         case "$VERSION" in
             *Bionic*)
@@ -336,6 +341,7 @@ else
         case "$ID" in
             fedora)
                 $SUDO dnf install -y dnf-utils
+                $SUDO dnf install -y moby-engine
                 ;;
             centos|rhel|ol|virtuozzo)
                 MAJOR_VERSION="$(echo $VERSION_ID | cut -d. -f1)"
@@ -430,6 +436,7 @@ function preload_wheels_for_tox() {
         mv $wip_wheelhouse wheelhouse
         md5sum $require_files $constraint_files > $md5
     fi
+
     popd > /dev/null
 }
 
