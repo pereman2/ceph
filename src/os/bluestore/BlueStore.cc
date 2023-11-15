@@ -15892,7 +15892,7 @@ void BlueStore::_do_write_small(
     if (!cct->_conf->bluestore_zero_block_detection || !bl.is_zero()) {
       BlobRef b = c->new_blob();
       _pad_zeros(&bl, &b_off0, min_alloc_size);
-      wctx->write(offset, b, alloc_len, b_off0, bl, b_off, length, false, true);
+      wctx->write(offset, b, alloc_len, b_off0, std::move(bl), b_off, length, false, true);
     } else { // if (bl.is_zero())
       dout(20) << __func__ << " skip small zero block " << std::hex
         << " (0x" << b_off0 << "~" << bl.length() << ")"
@@ -15986,14 +15986,14 @@ void BlueStore::_do_write_small(
 		   << b_off << "~" << b_len
 		   << " pad 0x" << head_pad << " + 0x" << tail_pad
 		   << std::dec << " of mutable " << *b << dendl;
-	  _buffer_cache_write(txc, b, b_off, bl,
+	  Buffer* buffer = _buffer_cache_write(txc, b, b_off, std::move(bl),
 			      wctx->buffered ? 0 : Buffer::FLAG_NOCACHE);
 
 	  if (!g_conf()->bluestore_debug_omit_block_device_write) {
 	    if (b_len < prefer_deferred_size) {
 	      dout(20) << __func__ << " deferring small 0x" << std::hex
 		       << b_len << std::dec << " unused write via deferred" << dendl;
-	      bluestore_deferred_op_t *op = _get_deferred_op(txc, bl.length());
+	      bluestore_deferred_op_t *op = _get_deferred_op(txc, buffer->data.length());
 	      op->op = bluestore_deferred_op_t::OP_WRITE;
 	      b->get_blob().map(
 		b_off, b_len,
@@ -16001,17 +16001,17 @@ void BlueStore::_do_write_small(
 		  op->extents.emplace_back(bluestore_pextent_t(offset, length));
 		  return 0;
 		});
-	      op->data = bl;
+	      op->data = buffer->data;
 	    } else {
 	      b->get_blob().map_bl(
-		b_off, bl,
+		b_off, buffer->data,
 		[&](uint64_t offset, bufferlist& t) {
 		  bdev->aio_write(offset, t,
 				  &txc->ioc, wctx->buffered);
 		});
 	    }
 	  }
-	  b->dirty_blob().calc_csum(b_off, bl);
+	  b->dirty_blob().calc_csum(b_off, buffer->data);
 	  dout(20) << __func__ << "  lex old " << *ep << dendl;
 	  Extent *le = o->extent_map.set_lextent(c, offset, b_off + head_pad, length,
 						 b,
@@ -16136,7 +16136,7 @@ void BlueStore::_do_write_small(
 		       << " (0x" << b_off << "~" << length << ")"
 		       << std::dec << dendl;
 
-	      wctx->write(offset, b, alloc_len, b_off0, bl, b_off, length,
+	      wctx->write(offset, b, alloc_len, b_off0, std::move(bl), b_off, length,
 		  false, false);
 	      logger->inc(l_bluestore_write_small_unused);
 	    } else { // if (bl.is_zero())
@@ -16199,7 +16199,7 @@ void BlueStore::_do_write_small(
 	      << " (0x" << b_off << "~" << length << ")"
 	      << std::dec << dendl;
 
-	    wctx->write(offset, b, alloc_len, b_off0, bl, b_off, length,
+	    wctx->write(offset, b, alloc_len, b_off0, std::move(bl), b_off, length,
 		false, false);
 	    logger->inc(l_bluestore_write_small_unused);
 	  } else { // if (bl.is_zero())
@@ -16250,7 +16250,7 @@ void BlueStore::_do_write_small(
     // new blob.
     BlobRef b = c->new_blob();
     _pad_zeros(&bl, &b_off0, block_size);
-    wctx->write(offset, b, alloc_len, b_off0, bl, b_off, length,
+    wctx->write(offset, b, alloc_len, b_off0, std::move(bl), b_off, length,
 	min_alloc_size != block_size, // use 'unused' bitmap when alloc granularity
                                       // doesn't match disk one only
 	true);
@@ -16575,7 +16575,7 @@ void BlueStore::_do_write_big(
 
     // Zero detection -- big block
     if (!cct->_conf->bluestore_zero_block_detection || !t.is_zero()) {
-      wctx->write(offset, b, l, b_off, t, b_off, l, false, new_blob);
+      wctx->write(offset, b, l, b_off, std::move(t), b_off, l, false, new_blob);
 
       dout(20) << __func__ << " schedule write big: 0x"
       << std::hex << offset << "~" << l << std::dec
@@ -16603,9 +16603,8 @@ int BlueStore::_do_alloc_write(
   OnodeRef& o,
   WriteContext *wctx)
 {
-  dout(20) << __func__ << " txc " << txc
-	   << " " << wctx->writes.size() << " blobs"
-	   << dendl;
+  dout(20) << __func__ << " txc " << txc << " " << wctx->writes.size()
+           << " blobs" << dendl;
   if (wctx->writes.empty()) {
     return 0;
   }
@@ -16613,54 +16612,45 @@ int BlueStore::_do_alloc_write(
   CompressorRef c;
   double crr = 0;
   if (wctx->compress) {
-    c = select_option(
-      "compression_algorithm",
-      compressor,
-      [&]() {
-        string val;
-        if (coll->pool_opts.get(pool_opts_t::COMPRESSION_ALGORITHM, &val)) {
-          CompressorRef cp = compressor;
-          if (!cp || cp->get_type_name() != val) {
-            cp = Compressor::create(cct, val);
-	    if (!cp) {
-	      if (_set_compression_alert(false, val.c_str())) {
-	        derr << __func__ << " unable to initialize " << val.c_str()
-		     << " compressor" << dendl;
-	      }
-	    }
+    c = select_option("compression_algorithm", compressor, [&]() {
+      string val;
+      if (coll->pool_opts.get(pool_opts_t::COMPRESSION_ALGORITHM, &val)) {
+        CompressorRef cp = compressor;
+        if (!cp || cp->get_type_name() != val) {
+          cp = Compressor::create(cct, val);
+          if (!cp) {
+            if (_set_compression_alert(false, val.c_str())) {
+              derr << __func__ << " unable to initialize " << val.c_str()
+                   << " compressor" << dendl;
+            }
           }
-          return std::optional<CompressorRef>(cp);
         }
-        return std::optional<CompressorRef>();
+        return std::optional<CompressorRef>(cp);
       }
-    );
+      return std::optional<CompressorRef>();
+    });
 
     crr = select_option(
-      "compression_required_ratio",
-      cct->_conf->bluestore_compression_required_ratio,
-      [&]() {
-        double val;
-        if (coll->pool_opts.get(pool_opts_t::COMPRESSION_REQUIRED_RATIO, &val)) {
-          return std::optional<double>(val);
-        }
-        return std::optional<double>();
-      }
-    );
+        "compression_required_ratio",
+        cct->_conf->bluestore_compression_required_ratio, [&]() {
+          double val;
+          if (coll->pool_opts.get(pool_opts_t::COMPRESSION_REQUIRED_RATIO,
+                                  &val)) {
+            return std::optional<double>(val);
+          }
+          return std::optional<double>();
+        });
   }
 
   // checksum
   int64_t csum = csum_type.load();
-  csum = select_option(
-    "csum_type",
-    csum,
-    [&]() {
-      int64_t val;
-      if (coll->pool_opts.get(pool_opts_t::CSUM_TYPE, &val)) {
-        return std::optional<int64_t>(val);
-      }
-      return std::optional<int64_t>();
+  csum = select_option("csum_type", csum, [&]() {
+    int64_t val;
+    if (coll->pool_opts.get(pool_opts_t::CSUM_TYPE, &val)) {
+      return std::optional<int64_t>(val);
     }
-  );
+    return std::optional<int64_t>();
+  });
 
   // compress (as needed) and calc needed space
   uint64_t need = 0;
@@ -16677,7 +16667,7 @@ int BlueStore::_do_alloc_write(
   // and the condition is : (data_size < deferred).
 
   auto max_bsize = std::max(wctx->target_blob_size, min_alloc_size);
-  for (auto& wi : wctx->writes) {
+  for (auto &wi : wctx->writes) {
     if (c && wi.blob_length > min_alloc_size) {
       auto start = mono_clock::now();
 
@@ -16697,65 +16687,60 @@ int BlueStore::_do_alloc_write(
       // that doesn't take header overhead  into account
       uint64_t result_len = p2roundup(compressed_len, min_alloc_size);
       if (r == 0 && result_len <= want_len && result_len < wi.blob_length) {
-	bluestore_compression_header_t chdr;
-	chdr.type = c->get_type();
-	chdr.length = t.length();
-	chdr.compressor_message = compressor_message;
-	encode(chdr, wi.compressed_bl);
-	wi.compressed_bl.claim_append(t);
+        bluestore_compression_header_t chdr;
+        chdr.type = c->get_type();
+        chdr.length = t.length();
+        chdr.compressor_message = compressor_message;
+        encode(chdr, wi.compressed_bl);
+        wi.compressed_bl.claim_append(t);
 
-	compressed_len = wi.compressed_bl.length();
-	result_len = p2roundup(compressed_len, min_alloc_size);
-	if (result_len <= want_len && result_len < wi.blob_length) {
-	  // Cool. We compressed at least as much as we were hoping to.
-	  // pad out to min_alloc_size
-	  wi.compressed_bl.append_zero(result_len - compressed_len);
-	  wi.compressed_len = compressed_len;
-	  wi.compressed = true;
-	  logger->inc(l_bluestore_write_pad_bytes, result_len - compressed_len);
-	  dout(20) << __func__ << std::hex << "  compressed 0x" << wi.blob_length
-		   << " -> 0x" << compressed_len << " => 0x" << result_len
-		   << " with " << c->get_type()
-		   << std::dec << dendl;
-	  txc->statfs_delta.compressed() += compressed_len;
-	  txc->statfs_delta.compressed_original() += wi.blob_length;
-	  txc->statfs_delta.compressed_allocated() += result_len;
-	  logger->inc(l_bluestore_compress_success_count);
-	  need += result_len;
-	  data_size += result_len;
-	} else {
-	  rejected = true;
-	}
+        compressed_len = wi.compressed_bl.length();
+        result_len = p2roundup(compressed_len, min_alloc_size);
+        if (result_len <= want_len && result_len < wi.blob_length) {
+          // Cool. We compressed at least as much as we were hoping to.
+          // pad out to min_alloc_size
+          wi.compressed_bl.append_zero(result_len - compressed_len);
+          wi.compressed_len = compressed_len;
+          wi.compressed = true;
+          logger->inc(l_bluestore_write_pad_bytes, result_len - compressed_len);
+          dout(20) << __func__ << std::hex << "  compressed 0x"
+                   << wi.blob_length << " -> 0x" << compressed_len << " => 0x"
+                   << result_len << " with " << c->get_type() << std::dec
+                   << dendl;
+          txc->statfs_delta.compressed() += compressed_len;
+          txc->statfs_delta.compressed_original() += wi.blob_length;
+          txc->statfs_delta.compressed_allocated() += result_len;
+          logger->inc(l_bluestore_compress_success_count);
+          need += result_len;
+          data_size += result_len;
+        } else {
+          rejected = true;
+        }
       } else if (r != 0) {
-	dout(5) << __func__ << std::hex << "  0x" << wi.blob_length
-		 << " bytes compressed using " << c->get_type_name()
-		 << std::dec
-		 << " failed with errcode = " << r
-		 << ", leaving uncompressed"
-		 << dendl;
-	logger->inc(l_bluestore_compress_rejected_count);
-	need += wi.blob_length;
-	data_size += wi.bl.length();
+        dout(5) << __func__ << std::hex << "  0x" << wi.blob_length
+                << " bytes compressed using " << c->get_type_name() << std::dec
+                << " failed with errcode = " << r << ", leaving uncompressed"
+                << dendl;
+        logger->inc(l_bluestore_compress_rejected_count);
+        need += wi.blob_length;
+        data_size += wi.bl.length();
       } else {
-	rejected = true;
+        rejected = true;
       }
 
       if (rejected) {
-	dout(20) << __func__ << std::hex << "  0x" << wi.blob_length
-		 << " compressed to 0x" << compressed_len << " -> 0x" << result_len
-		 << " with " << c->get_type()
-		 << ", which is more than required 0x" << want_len_raw
-		 << " -> 0x" << want_len
-		 << ", leaving uncompressed"
-		 << std::dec << dendl;
-	logger->inc(l_bluestore_compress_rejected_count);
-	need += wi.blob_length;
-	data_size += wi.bl.length();
+        dout(20) << __func__ << std::hex << "  0x" << wi.blob_length
+                 << " compressed to 0x" << compressed_len << " -> 0x"
+                 << result_len << " with " << c->get_type()
+                 << ", which is more than required 0x" << want_len_raw
+                 << " -> 0x" << want_len << ", leaving uncompressed" << std::dec
+                 << dendl;
+        logger->inc(l_bluestore_compress_rejected_count);
+        need += wi.blob_length;
+        data_size += wi.bl.length();
       }
-      log_latency("compress@_do_alloc_write",
-	l_bluestore_compress_lat,
-        mono_clock::now() - start,
-	cct->_conf->bluestore_log_op_age );
+      log_latency("compress@_do_alloc_write", l_bluestore_compress_lat,
+                  mono_clock::now() - start, cct->_conf->bluestore_log_op_age);
     } else {
       need += wi.blob_length;
       data_size += wi.bl.length();
@@ -16764,15 +16749,12 @@ int BlueStore::_do_alloc_write(
   PExtentVector prealloc;
   prealloc.reserve(2 * wctx->writes.size());
   int64_t prealloc_left = 0;
-  prealloc_left = alloc->allocate(
-    need, min_alloc_size, need,
-    0, &prealloc);
+  prealloc_left = alloc->allocate(need, min_alloc_size, need, 0, &prealloc);
   if (prealloc_left < 0 || prealloc_left < (int64_t)need) {
     derr << __func__ << " failed to allocate 0x" << std::hex << need
          << " allocated 0x " << (prealloc_left < 0 ? 0 : prealloc_left)
-         << " min_alloc_size 0x" << min_alloc_size
-         << " available 0x " << alloc->get_free()
-         << std::dec << dendl;
+         << " min_alloc_size 0x" << min_alloc_size << " available 0x "
+         << alloc->get_free() << std::dec << dendl;
     if (prealloc.size()) {
       alloc->release(prealloc);
     }
@@ -16780,29 +16762,28 @@ int BlueStore::_do_alloc_write(
   }
   _collect_allocation_stats(need, min_alloc_size, prealloc);
 
-  dout(20) << __func__ << std::hex << " need=0x" << need << " data=0x" << data_size
-	   << " prealloc " << prealloc << dendl;
+  dout(20) << __func__ << std::hex << " need=0x" << need << " data=0x"
+           << data_size << " prealloc " << prealloc << dendl;
   auto prealloc_pos = prealloc.begin();
   ceph_assert(prealloc_pos != prealloc.end());
 
-  for (auto& wi : wctx->writes) {
-    bluestore_blob_t& dblob = wi.b->dirty_blob();
+  for (auto &wi : wctx->writes) {
+    bluestore_blob_t &dblob = wi.b->dirty_blob();
     uint64_t b_off = wi.b_off;
-    bufferlist *l = &wi.bl;
+    bufferlist *data_to_disk = &wi.bl;
     uint64_t final_length = wi.blob_length;
     uint64_t csum_length = wi.blob_length;
     if (wi.compressed) {
       final_length = wi.compressed_bl.length();
       csum_length = final_length;
       unsigned csum_order = std::countr_zero(csum_length);
-      l = &wi.compressed_bl;
+      data_to_disk = &wi.compressed_bl;
       dblob.set_compressed(wi.blob_length, wi.compressed_len);
       if (csum != Checksummer::CSUM_NONE) {
-        dout(20) << __func__
-		 << " initialize csum setting for compressed blob " << *wi.b
-                 << " csum_type " << Checksummer::get_csum_type_string(csum)
-                 << " csum_order " << csum_order
-                 << " csum_length 0x" << std::hex << csum_length
+        dout(20) << __func__ << " initialize csum setting for compressed blob "
+                 << *wi.b << " csum_type "
+                 << Checksummer::get_csum_type_string(csum) << " csum_order "
+                 << csum_order << " csum_length 0x" << std::hex << csum_length
                  << " blob_length 0x" << wi.blob_length
                  << " compressed_length 0x" << wi.compressed_len << std::dec
                  << dendl;
@@ -16812,34 +16793,34 @@ int BlueStore::_do_alloc_write(
       unsigned csum_order;
       // initialize newly created blob only
       ceph_assert(dblob.is_mutable());
-      if (l->length() != wi.blob_length) {
+      if (data_to_disk->length() != wi.blob_length) {
         // hrm, maybe we could do better here, but let's not bother.
         dout(20) << __func__ << " forcing csum_order to block_size_order "
-                << block_size_order << dendl;
-	csum_order = block_size_order;
+                 << block_size_order << dendl;
+        csum_order = block_size_order;
       } else {
-        csum_order = std::min<unsigned>(wctx->csum_order, std::countr_zero(l->length()));
+        csum_order =
+            std::min<unsigned>(wctx->csum_order, std::countr_zero(data_to_disk->length()));
       }
       // try to align blob with max_blob_size to improve
       // its reuse ratio, e.g. in case of reverse write
       uint32_t suggested_boff =
-       (wi.logical_offset - (wi.b_off0 - wi.b_off)) % max_bsize;
+          (wi.logical_offset - (wi.b_off0 - wi.b_off)) % max_bsize;
       if ((suggested_boff % (1 << csum_order)) == 0 &&
-           suggested_boff + final_length <= max_bsize &&
-           suggested_boff > b_off) {
-        dout(20) << __func__ << " forcing blob_offset to 0x"
-                 << std::hex << suggested_boff << std::dec << dendl;
+          suggested_boff + final_length <= max_bsize &&
+          suggested_boff > b_off) {
+        dout(20) << __func__ << " forcing blob_offset to 0x" << std::hex
+                 << suggested_boff << std::dec << dendl;
         ceph_assert(suggested_boff >= b_off);
         csum_length += suggested_boff - b_off;
         b_off = suggested_boff;
       }
       if (csum != Checksummer::CSUM_NONE) {
-        dout(20) << __func__
-		 << " initialize csum setting for new blob " << *wi.b
-                 << " csum_type " << Checksummer::get_csum_type_string(csum)
-                 << " csum_order " << csum_order
-                 << " csum_length 0x" << std::hex << csum_length << std::dec
-                 << dendl;
+        dout(20) << __func__ << " initialize csum setting for new blob "
+                 << *wi.b << " csum_type "
+                 << Checksummer::get_csum_type_string(csum) << " csum_order "
+                 << csum_order << " csum_length 0x" << std::hex << csum_length
+                 << std::dec << dendl;
         dblob.init_csum(csum, csum_order, csum_length);
       }
     }
@@ -16850,29 +16831,29 @@ int BlueStore::_do_alloc_write(
     while (left > 0) {
       ceph_assert(prealloc_left > 0);
       if (prealloc_pos->length <= left) {
-	prealloc_left -= prealloc_pos->length;
-	left -= prealloc_pos->length;
-	txc->statfs_delta.allocated() += prealloc_pos->length;
-	extents.push_back(*prealloc_pos);
-	++prealloc_pos;
+        prealloc_left -= prealloc_pos->length;
+        left -= prealloc_pos->length;
+        txc->statfs_delta.allocated() += prealloc_pos->length;
+        extents.push_back(*prealloc_pos);
+        ++prealloc_pos;
       } else {
-	extents.emplace_back(prealloc_pos->offset, left);
-	prealloc_pos->offset += left;
-	prealloc_pos->length -= left;
-	prealloc_left -= left;
-	txc->statfs_delta.allocated() += left;
-	left = 0;
-	break;
+        extents.emplace_back(prealloc_pos->offset, left);
+        prealloc_pos->offset += left;
+        prealloc_pos->length -= left;
+        prealloc_left -= left;
+        txc->statfs_delta.allocated() += left;
+        left = 0;
+        break;
       }
     }
-    for (auto& p : extents) {
+    for (auto &p : extents) {
       txc->allocated.insert(p.offset, p.length);
     }
     dblob.allocated(p2align(b_off, min_alloc_size), final_length, extents);
 
     dout(20) << __func__ << " blob " << *wi.b << dendl;
     if (dblob.has_csum()) {
-      dblob.calc_csum(b_off, *l);
+      dblob.calc_csum(b_off, *data_to_disk);
     }
 
     if (wi.mark_unused) {
@@ -16889,37 +16870,38 @@ int BlueStore::_do_alloc_write(
 
     Extent *le = o->extent_map.set_lextent(coll, wi.logical_offset,
                                            b_off + (wi.b_off0 - wi.b_off),
-                                           wi.length0,
-                                           wi.b,
-                                           nullptr);
+                                           wi.length0, wi.b, nullptr);
     wi.b->dirty_blob().mark_used(le->blob_offset, le->length);
     txc->statfs_delta.stored() += le->length;
     dout(20) << __func__ << "  lex " << *le << dendl;
-    _buffer_cache_write(txc, wi.b, b_off, wi.bl,
-                        wctx->buffered ? 0 : Buffer::FLAG_NOCACHE);
+    Buffer *buffer = _buffer_cache_write(
+        txc, wi.b, b_off, wi.bl, wctx->buffered ? 0 : Buffer::FLAG_NOCACHE);
+    
+    data_to_disk = wi.compressed ? data_to_disk : &buffer->data;
 
     // queue io
     if (!g_conf()->bluestore_debug_omit_block_device_write) {
       if (data_size < prefer_deferred_size_snapshot) {
-	dout(20) << __func__ << " deferring 0x" << std::hex
-		 << l->length() << std::dec << " write via deferred" << dendl;
-	bluestore_deferred_op_t *op = _get_deferred_op(txc, l->length());
-	op->op = bluestore_deferred_op_t::OP_WRITE;
-	int r = wi.b->get_blob().map(
-	  b_off, l->length(),
-	  [&](uint64_t offset, uint64_t length) {
-	    op->extents.emplace_back(bluestore_pextent_t(offset, length));
-	    return 0;
-	  });
+        dout(20) << __func__ << " deferring 0x" << std::hex
+                 << buffer->data.length() << std::dec << " write via deferred"
+                 << dendl;
+        bluestore_deferred_op_t *op =
+            _get_deferred_op(txc, buffer->data.length());
+        op->op = bluestore_deferred_op_t::OP_WRITE;
+        int r = wi.b->get_blob().map(b_off, buffer->data.length(),
+                                     [&](uint64_t offset, uint64_t length) {
+                                       op->extents.emplace_back(
+                                           bluestore_pextent_t(offset, length));
+                                       return 0;
+                                     });
         ceph_assert(r == 0);
-	op->data = *l;
+        op->data = buffer->data;
       } else {
-	wi.b->get_blob().map_bl(
-	  b_off, *l,
-	  [&](uint64_t offset, bufferlist& t) {
-	    bdev->aio_write(offset, t, &txc->ioc, false);
-	  });
-	logger->inc(l_bluestore_write_new);
+        wi.b->get_blob().map_bl(b_off, *data_to_disk,
+                                [&](uint64_t offset, bufferlist &t) {
+                                  bdev->aio_write(offset, t, &txc->ioc, false);
+                                });
+        logger->inc(l_bluestore_write_new);
       }
     }
   }

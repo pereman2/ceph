@@ -309,7 +309,10 @@ public:
 	   unsigned f = 0)
       : space(space), state(s), flags(f), seq(q), offset(o),
 	length(b.length()), data(b) {}
-
+    Buffer(BufferSpace *space, unsigned s, uint64_t q, uint32_t o, ceph::buffer::list&& b,
+	   unsigned f = 0)
+      : space(space), state(s), flags(f), seq(q), offset(o),
+	length(b.length()), data(std::move(b)) {}
     bool is_empty() const {
       return state == STATE_EMPTY;
     }
@@ -378,7 +381,7 @@ public:
       ceph_assert(writing.empty());
     }
 
-    void _add_buffer(BufferCacheShard* cache, Buffer* b, int level, Buffer* near) {
+    Buffer* _add_buffer(BufferCacheShard* cache, Buffer* b, int level, Buffer* near) {
       cache->_audit("_add_buffer start");
       buffer_map[b->offset].reset(b);
       if (b->is_writing()) {
@@ -403,6 +406,7 @@ public:
         cache->_add(b, level, near);
       }
       cache->_audit("_add_buffer end");
+      return buffer_map[b->offset].get();
     }
     void _rm_buffer(BufferCacheShard* cache, Buffer *b) {
       _rm_buffer(cache, buffer_map.find(b->offset));
@@ -445,14 +449,25 @@ public:
     }
     int _discard(BufferCacheShard* cache, uint32_t offset, uint32_t length);
 
-    void write(BufferCacheShard* cache, uint64_t seq, uint32_t offset, ceph::buffer::list& bl,
+    Buffer* write(BufferCacheShard* cache, uint64_t seq, uint32_t offset, ceph::buffer::list&& bl,
+	       unsigned flags) {
+      std::lock_guard l(cache->lock);
+      Buffer *b = new Buffer(this, Buffer::STATE_WRITING, seq, offset, std::move(bl),
+			     flags);
+      b->cache_private = _discard(cache, offset, bl.length());
+      Buffer* to_return = _add_buffer(cache, b, (flags & Buffer::FLAG_NOCACHE) ? 0 : 1, nullptr);
+      cache->_trim();
+      return to_return;
+    }
+    Buffer* write(BufferCacheShard* cache, uint64_t seq, uint32_t offset, ceph::buffer::list& bl,
 	       unsigned flags) {
       std::lock_guard l(cache->lock);
       Buffer *b = new Buffer(this, Buffer::STATE_WRITING, seq, offset, bl,
 			     flags);
       b->cache_private = _discard(cache, offset, bl.length());
-      _add_buffer(cache, b, (flags & Buffer::FLAG_NOCACHE) ? 0 : 1, nullptr);
+      Buffer* to_return = _add_buffer(cache, b, (flags & Buffer::FLAG_NOCACHE) ? 0 : 1, nullptr);
       cache->_trim();
+      return to_return;
     }
     void _finish_write(BufferCacheShard* cache, uint64_t seq);
     void did_read(BufferCacheShard* cache, uint32_t offset, ceph::buffer::list& bl) {
@@ -2886,15 +2901,26 @@ private:
   int _fsck(FSCKDepth depth, bool repair);
   int _fsck_on_open(BlueStore::FSCKDepth depth, bool repair);
 
-  void _buffer_cache_write(
+  Buffer* _buffer_cache_write(
+    TransContext *txc,
+    BlobRef b,
+    uint64_t offset,
+    ceph::buffer::list&& bl,
+    unsigned flags) {
+    txc->shared_blobs_written.insert(b->shared_blob);
+    return b->shared_blob->bc.write(b->shared_blob->get_cache(), txc->seq, offset, std::move(bl),
+			     flags);
+  }
+
+  Buffer* _buffer_cache_write(
     TransContext *txc,
     BlobRef b,
     uint64_t offset,
     ceph::buffer::list& bl,
     unsigned flags) {
-    b->dirty_bc().write(b->shared_blob->get_cache(), txc->seq, offset, bl,
+    txc->shared_blobs_written.insert(b->shared_blob);
+    return b->shared_blob->bc.write(b->shared_blob->get_cache(), txc->seq, offset, bl,
 			     flags);
-    txc->blobs_written.insert(b);
   }
 
   int _collection_list(
@@ -3539,6 +3565,26 @@ private:
       compress = other.compress;
       target_blob_size = other.target_blob_size;
       csum_order = other.csum_order;
+    }
+    void write(
+      uint64_t loffs,
+      BlobRef b,
+      uint64_t blob_len,
+      uint64_t o,
+      ceph::buffer::list&& bl,
+      uint64_t o0,
+      uint64_t len0,
+      bool _mark_unused,
+      bool _new_blob) {
+      writes.emplace_back(loffs,
+                          b,
+                          blob_len,
+                          o,
+                          bl,
+                          o0,
+                          len0,
+                          _mark_unused,
+                          _new_blob);
     }
     void write(
       uint64_t loffs,
