@@ -1951,10 +1951,12 @@ void BlueStore::BufferSpace::_dup_writing(TransContext* txc, Collection* collect
       if (collection->is_deferred_seq(to_b->seq)) {
         collection->add_deferred_dependency(to_b->seq, onode);
       } else {
-      txc->buffers_written.insert({onode.get(), b.seq});
-    }
-      to._discard(collection->cache, to_b->offset, to_b->length);
-      to._add_buffer(collection->cache, to_b, 0, nullptr);
+        txc->buffers_written.insert({onode.get(), b.seq});
+      }
+      if (to_b->length > 0) {
+        to._discard(collection->cache, to_b->offset, to_b->length);
+        to._add_buffer(collection->cache, to_b, 0, nullptr);
+      }
     }
   }
 }
@@ -12026,32 +12028,34 @@ void BlueStore::_read_cache(
     unsigned b_off = l_off + lp->blob_offset;
     unsigned b_len = std::min(left, lp->length - l_off);
 
-    ready_regions_t cache_res;
+    ready_regions_t cached_regions;
     interval_set<uint32_t> cache_interval;
     o->bc.read(
-      bptr->shared_blob->get_cache(), pos, b_len, cache_res, cache_interval,
+      bptr->shared_blob->get_cache(), pos, b_len, cached_regions, cache_interval,
       read_cache_policy);
     dout(20) << __func__ << "  blob " << *bptr << std::hex
              << " need 0x" << pos << "~" << b_len
              << " cache has 0x" << cache_interval
              << std::dec << dendl;
 
-    auto pc = cache_res.begin();
+    auto cached_regions_it = cached_regions.begin();
     uint64_t chunk_size = bptr->get_blob().get_chunk_size(block_size);
     while (b_len > 0) {
       unsigned l;
-      if (pc != cache_res.end() &&
-          pc->first == pos) {
-        l = pc->second.length();
-        ready_regions[pos] = std::move(pc->second);
+      uint64_t cached_region_offset = cached_regions_it->first;
+      bufferlist& cached_bl = cached_regions_it->second;
+      if (cached_regions_it != cached_regions.end() &&
+          cached_region_offset == pos) {
+        l = cached_regions_it->second.length();
+        ready_regions[pos] = std::move(cached_bl);
         dout(30) << __func__ << "    use cache 0x" << std::hex << pos << ": 0x"
                  << pos << "~" << l << std::dec << dendl;
-        ++pc;
+        ++cached_regions_it;
       } else {
         l = b_len;
-        if (pc != cache_res.end()) {
-          ceph_assert(pc->first > pos);
-          l = pc->first - pos;
+        if (cached_regions_it != cached_regions.end()) {
+          ceph_assert(cached_region_offset > pos);
+          l = cached_region_offset - pos;
         }
         dout(30) << __func__ << "    will read 0x" << std::hex << pos << ": 0x"
                  << b_off << "~" << l << std::dec << dendl;
@@ -12222,6 +12226,7 @@ int BlueStore::_generate_read_result_bl(
         for (const auto& r : req.regs) {
           if (buffered) {
             bufferlist region_buffer;
+            // NOTE(pere): is front good?
             region_buffer.substr_of(req.bl, r.front, r.length);
             // need offset before padding
             o->bc.did_read(bptr->shared_blob->get_cache(), r.logical_offset, r.length, std::move(region_buffer));

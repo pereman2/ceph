@@ -11050,6 +11050,123 @@ TEST_P(StoreTestOmapUpgrade, LargeLegacyToPG) {
   }
 }
 
+TEST_P(StoreTest, BufferSpaceSimple) {
+  BlueStore::BufferSpace buffer_space;
+
+  PerfCounters* logger = (PerfCounters*)store->get_perf_counters();
+
+  BlueStore::BufferCacheShard* buffer_cache_shard = BlueStore::BufferCacheShard::create(store->cct, "2q", logger);
+  bufferlist bl;
+  bl.append("aaaaaaaa");
+  buffer_space.write(buffer_cache_shard, 0, 0, bl, 0);
+  buffer_space._clear(buffer_cache_shard);
+  ASSERT_EQ(buffer_space.buffer_map.size(), 0);
+}
+
+TEST_P(StoreTest, BufferSpaceDiscard) {
+  BlueStore::BufferSpace buffer_space;
+
+  PerfCounters* logger = (PerfCounters*)store->get_perf_counters();
+
+  BlueStore::BufferCacheShard* buffer_cache_shard = BlueStore::BufferCacheShard::create(store->cct, "2q", logger);
+  bufferlist bl;
+  for (int i = 0; i < 4096; i++) {
+    bl.append('a');
+  }
+  auto clear_fill = [&]() {
+    buffer_space._clear(buffer_cache_shard);
+    ASSERT_EQ(buffer_space.buffer_map.size(), 0);
+    buffer_space.write(buffer_cache_shard, 0, 4096, bl, 0);
+  };
+
+  {
+    // remove prefix
+    // case dicard_offset == offset
+    clear_fill();
+    buffer_space.discard(buffer_cache_shard, 4096, 100);
+    ASSERT_EQ(buffer_space.buffer_map.begin()->first, 4196);
+    ASSERT_EQ(buffer_space.buffer_map.begin()->second->length, 4096-100);
+    ASSERT_EQ(buffer_space.buffer_map.size(), 1);
+
+    clear_fill();
+    // case dicard_offset < offset
+    buffer_space.discard(buffer_cache_shard, 222, 4096-222+100);
+    ASSERT_EQ(buffer_space.buffer_map.begin()->first, 4196);
+    ASSERT_EQ(buffer_space.buffer_map.begin()->second->length, 4096-100);
+    ASSERT_EQ(buffer_space.buffer_map.size(), 1);
+  }
+
+  {
+    clear_fill();
+    // remove suffix
+    buffer_space.discard(buffer_cache_shard, 4100, 4096);
+    ASSERT_EQ(buffer_space.buffer_map.begin()->first, 4096);
+    ASSERT_EQ(buffer_space.buffer_map.begin()->second->length, 4100-4096);
+    ASSERT_EQ(buffer_space.buffer_map.size(), 1);
+  }
+
+  {
+    clear_fill();
+    // remove middle
+    auto it = buffer_space.buffer_map.begin();
+    buffer_space.discard(buffer_cache_shard, 4100, 100);
+    ASSERT_EQ(it->first, 4096);
+    ASSERT_EQ(it->second->length, 4100-4096);
+
+    it++;
+    ASSERT_EQ(it->first, 4200);
+    ASSERT_EQ(it->second->length, (4096*2)-4200);
+    ASSERT_EQ(buffer_space.buffer_map.size(), 2);
+  }
+
+  {
+    // remove whole exact
+    clear_fill();
+    buffer_space.discard(buffer_cache_shard, 4096, 4096);
+    ASSERT_EQ(buffer_space.buffer_map.size(), 0);
+
+    // remove whole extra both ends
+    clear_fill();
+    buffer_space.discard(buffer_cache_shard, 0, 4096*3);
+    ASSERT_EQ(buffer_space.buffer_map.size(), 0);
+
+    // remove whole extra prefix
+    clear_fill();
+    buffer_space.discard(buffer_cache_shard, 0, 4096*2);
+    ASSERT_EQ(buffer_space.buffer_map.size(), 0);
+
+    // remove whole extra suffix
+    clear_fill();
+    buffer_space.discard(buffer_cache_shard, 4096, 4096*3);
+    ASSERT_EQ(buffer_space.buffer_map.size(), 0);
+  }
+
+  buffer_space._clear(buffer_cache_shard);
+  ASSERT_EQ(buffer_space.buffer_map.size(), 0);
+}
+
+TEST_P(StoreTest, BufferSpaceRead) {
+  BlueStore::BufferSpace buffer_space;
+
+  PerfCounters* logger = (PerfCounters*)store->get_perf_counters();
+
+  BlueStore::BufferCacheShard* buffer_cache_shard = BlueStore::BufferCacheShard::create(store->cct, "2q", logger);
+  bufferlist bl;
+  for (int i = 0; i < 4096; i++) {
+    bl.append('a');
+  }
+  uint64_t number_of_buffers = 1000;
+  for (int i = 0; i < number_of_buffers; i++) {
+    buffer_space.write(buffer_cache_shard, 0, i*4096, bl, 0);
+  }
+  BlueStore::ready_regions_t ready_regions;
+  interval_set<uint32_t> ready_intervals;
+  buffer_space.read(buffer_cache_shard, 0, number_of_buffers*4096, ready_regions, ready_intervals);
+  ASSERT_EQ(ready_regions.size(), number_of_buffers);
+  buffer_space._clear(buffer_cache_shard);
+  ASSERT_EQ(buffer_space.buffer_map.size(), 0);
+}
+
 #endif  // WITH_BLUESTORE
 
 int main(int argc, char **argv) {
@@ -11074,7 +11191,7 @@ int main(int argc, char **argv) {
   // make sure we can adjust any config settings
   g_ceph_context->_conf._clear_safe_to_start_threads();
 
-  g_ceph_context->_conf.set_val_or_die("osd_journal_size", "400");
+  g_ceph_context->_conf.set_val_or_die("osd_journal_size", "401");
   g_ceph_context->_conf.set_val_or_die("filestore_index_retry_probability", "0.5");
   g_ceph_context->_conf.set_val_or_die("filestore_op_thread_timeout", "1000");
   g_ceph_context->_conf.set_val_or_die("filestore_op_thread_suicide_timeout", "10000");
