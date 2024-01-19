@@ -1325,8 +1325,10 @@ public:
     }
 
     ~Onode() {
-      std::lock_guard l(c->cache->lock);
-      bc._clear(c->cache);
+      if (c) {
+        std::lock_guard l(c->cache->lock);
+        bc._clear(c->cache);
+      }
     }
 
     static void decode_raw(
