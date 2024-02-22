@@ -25,6 +25,7 @@
 #include <typeinfo>
 #include <boost/container/flat_set.hpp>
 #include <boost/container/flat_map.hpp>
+// #include "include/time_function.h"
 
 #if defined(_GNU_SOURCE) && defined(WITH_SEASTAR) && !defined(WITH_ALIEN)
 #  include <sched.h>
@@ -321,6 +322,82 @@ public:
 void dump(ceph::Formatter *f);
 
 
+
+template<pool_index_t pool_ix, typename T>
+struct CephMemoryPoolAllocator {
+  struct FreeNode {
+    FreeNode *next;
+  };
+  char *memory;
+  size_t capacity;
+  FreeNode *head;
+  std::mutex lock;
+
+  // default constructors
+  CephMemoryPoolAllocator(const CephMemoryPoolAllocator& other) {
+    std::unique_lock<std::mutex> l(lock);
+    memory = other.memory;
+    capacity = other.capacity;
+    head = other.head;
+  };
+  CephMemoryPoolAllocator() :
+    memory(nullptr),
+    capacity(0),
+    head(nullptr) {
+      init(1024*1024);
+    }
+
+  ~CephMemoryPoolAllocator() {
+    delete[] memory;
+  }
+
+  void init(size_t _capacity) {
+    memory = new char[capacity];
+    capacity = _capacity;
+    for (size_t i = 0; i < capacity; i += sizeof(T)) {
+      FreeNode *node = reinterpret_cast<FreeNode*>(memory + i);
+      node->next = head;
+      head = node;
+    }
+  }
+
+  void* allocate() {
+    std::lock_guard<std::mutex> l(lock);
+    ceph_assert(memory != nullptr);
+    // If we run out of memory, allocate more
+    if (head == nullptr) {
+      size_t new_capacity = capacity * 2;
+      char *new_memory = new char[new_capacity];
+      memcpy(new_memory, memory, capacity);
+      for (size_t i = capacity; i < new_capacity; i += sizeof(T)) {
+        FreeNode *node = reinterpret_cast<FreeNode*>(new_memory + i);
+        node->next = head;
+        head = node;
+      }
+      delete[] memory;
+      memory = new_memory;
+      capacity = new_capacity;
+    }
+    FreeNode *node = head;
+    head = head->next;
+    return node;
+  }
+
+  void deallocate(void* pointer) {
+    std::lock_guard<std::mutex> l(lock);
+    FreeNode* new_head = (FreeNode*)pointer;
+    new_head->next = head;
+    head = new_head;
+  }
+};
+
+
+template<pool_index_t pool_ix, typename T>
+CephMemoryPoolAllocator<pool_ix, T>* ceph_get_memory_pool_allocator() {
+  return nullptr;
+}
+
+
 // STL allocator for use with containers.  All actual state
 // is stored in the static pool_allocator_base_t, which saves us from
 // passing the allocator to container constructors.
@@ -329,6 +406,7 @@ template<pool_index_t pool_ix, typename T>
 class pool_allocator {
   pool_t *pool;
   type_t *type = nullptr;
+  CephMemoryPoolAllocator<pool_ix, T>* memory_allocator;
 
 public:
   typedef pool_allocator<pool_ix, T> allocator_type;
@@ -349,6 +427,7 @@ public:
     if (debug_mode || force_register) {
       type = pool->get_type(typeid(T), sizeof(T));
     }
+    memory_allocator = ceph_get_memory_pool_allocator<pool_ix, T>();
   }
 
   pool_allocator(bool force_register=false) {
@@ -360,6 +439,7 @@ public:
   }
 
   T* allocate(size_t n, void *p = nullptr) {
+    // PbProfileFunction(f, "pool_allocator::allocate");
     size_t total = sizeof(T) * n;
     const auto shid = pick_a_shard_int();
     auto& shard = pool->shard[shid];
@@ -372,11 +452,18 @@ public:
       type->items += n;
 #endif
     }
-    T* r = reinterpret_cast<T*>(new char[total]);
-    return r;
+
+    if (memory_allocator != nullptr) {
+      T* r = reinterpret_cast<T*>(memory_allocator->allocate());
+      return r;
+    } else {
+      T* r = reinterpret_cast<T*>(new char[total]);
+      return r;
+    }
   }
 
   void deallocate(T* p, size_t n) {
+    // PbProfileFunction(f, "pool_allocator::deallocate");
     size_t total = sizeof(T) * n;
     const auto shid = pick_a_shard_int();
     auto& shard = pool->shard[shid];
@@ -389,7 +476,11 @@ public:
       type->items -= n;
 #endif
     }
-    delete[] reinterpret_cast<char*>(p);
+    if (memory_allocator != nullptr) {
+      memory_allocator->deallocate(p);
+    } else {
+      delete[] reinterpret_cast<char*>(p);
+    }
   }
 
   T* allocate_aligned(size_t n, size_t align, void *p = nullptr) {

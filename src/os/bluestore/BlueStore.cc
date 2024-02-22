@@ -52,6 +52,7 @@
 #include "common/pretty_binary.h"
 #include "common/WorkQueue.h"
 #include "kv/KeyValueHistogram.h"
+// #include "include/time_function.h"
 
 #if defined(WITH_LTTNG)
 #define TRACEPOINT_DEFINE
@@ -80,6 +81,30 @@ MEMPOOL_DEFINE_OBJECT_FACTORY(BlueStore::Blob, bluestore_blob,
 			      bluestore_blob);
 MEMPOOL_DEFINE_OBJECT_FACTORY(BlueStore::SharedBlob, bluestore_shared_blob,
 			      bluestore_shared_blob);
+
+template<mempool::pool_index_t, typename T>
+mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_extent, BlueStore::Extent>* ceph_get_memory_pool_allocator() {
+  static mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_extent, BlueStore::Extent> memory_pool_allocator;
+  return &memory_pool_allocator;
+}
+
+template<mempool::pool_index_t, typename T>
+mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_extent, BlueStore::Buffer>* ceph_get_memory_pool_allocator() {
+  static mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_extent, BlueStore::Buffer> memory_pool_allocator;
+  return &memory_pool_allocator;
+}
+
+template<mempool::pool_index_t, typename T>
+mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_extent, BlueStore::Blob>* ceph_get_memory_pool_allocator() {
+  static mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_extent, BlueStore::Blob> memory_pool_allocator;
+  return &memory_pool_allocator;
+}
+
+template<mempool::pool_index_t, typename T>
+mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_extent, BlueStore::SharedBlob>* ceph_get_memory_pool_allocator() {
+  static mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_extent, BlueStore::SharedBlob> memory_pool_allocator;
+  return &memory_pool_allocator;
+}
 
 // bluestore_txc
 MEMPOOL_DEFINE_OBJECT_FACTORY(BlueStore::TransContext, bluestore_transcontext,
@@ -14643,6 +14668,7 @@ int BlueStore::queue_transactions(
   ThreadPool::TPHandle *handle)
 {
   FUNCTRACE(cct);
+  // PbProfileFunction(f, "BlueStore::_txc_add_transaction");
   list<Context *> on_applied, on_commit, on_applied_sync;
   ObjectStore::Transaction::collect_contexts(
     tls, &on_applied, &on_commit, &on_applied_sync);
@@ -14765,8 +14791,17 @@ void BlueStore::_txc_add_transaction(TransContext *txc, Transaction *t)
        ++p, ++j) {
     cvec[j] = _get_collection(*p);
   }
+
+  // dout(1) << __func__ << " txc " << txc << " seq " << txc->seq
+  //   << " cvec " << cvec.size() << dendl;
   
   vector<OnodeRef> ovec(i.objects.size());
+
+  // std::vector<std::vector<Transaction::Op*>> ops_per_coll(cvec.size());
+  // for (int pos = 0; i.have_op(); ++pos) {
+  //   Transaction::Op *op = i.decode_op();
+  //   ops_per_coll[op->cid].push_back(op);
+  // }
 
   for (int pos = 0; i.have_op(); ++pos) {
     Transaction::Op *op = i.decode_op();
