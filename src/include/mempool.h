@@ -37,6 +37,7 @@
 #include "include/compact_map.h"
 #include "include/compact_set.h"
 #include "include/compat.h"
+#include "google/tcmalloc.h"
 
 
 /*
@@ -328,66 +329,103 @@ struct CephMemoryPoolAllocator {
   struct FreeNode {
     FreeNode *next;
   };
-  char *memory;
-  size_t capacity;
-  FreeNode *head;
-  std::mutex lock;
+
+  struct ThreadPage {
+    char *memory;
+    size_t capacity;
+  };
+
+  struct ThreadArena {
+    std::vector<ThreadPage> pages;
+    std::atomic<FreeNode*> head;
+  };
+
+  // ThreadPageHeader header is a utility struct to define the structure of the first 8 bytes of a page that must map to the pointer
+  // of the arena itself to allow for easy deallocation in different threads.
+  struct ThreadPageHeader {
+    ThreadArena* arena_pointer; // pointer to *ThreadArena
+  };
+
+  static ThreadArena* get_arena() {
+    static thread_local ThreadArena arena;
+    return &arena;
+  }
 
   // default constructors
   CephMemoryPoolAllocator(const CephMemoryPoolAllocator& other) {
-    std::unique_lock<std::mutex> l(lock);
-    memory = other.memory;
-    capacity = other.capacity;
-    head = other.head;
   };
-  CephMemoryPoolAllocator() :
-    memory(nullptr),
-    capacity(0),
-    head(nullptr) {
-      init(1024*1024);
-    }
-
-  ~CephMemoryPoolAllocator() {
-    delete[] memory;
+  CephMemoryPoolAllocator()
+  {
   }
 
-  void init(size_t _capacity) {
-    memory = new char[capacity];
-    capacity = _capacity;
-    for (size_t i = 0; i < capacity; i += sizeof(T)) {
-      FreeNode *node = reinterpret_cast<FreeNode*>(memory + i);
-      node->next = head;
-      head = node;
-    }
+  ~CephMemoryPoolAllocator() {
   }
 
   void* allocate() {
-    std::lock_guard<std::mutex> l(lock);
-    ceph_assert(memory != nullptr);
-    // If we run out of memory, allocate more
-    if (head == nullptr) {
-      size_t new_capacity = capacity * 2;
-      char *new_memory = new char[new_capacity];
-      memcpy(new_memory, memory, capacity);
-      for (size_t i = capacity; i < new_capacity; i += sizeof(T)) {
-        FreeNode *node = reinterpret_cast<FreeNode*>(new_memory + i);
-        node->next = head;
-        head = node;
+    ThreadArena* arena = get_arena();
+    // std::lock_guard<std::mutex> l(arena->lock);
+
+    if (arena->pages.empty() || arena->head == nullptr) {
+      // get page
+      size_t number_of_pages_per_alloc = 1;
+      // char* memory = (char*)mmap(nullptr, page_size * number_of_pages_per_alloc, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+      char* memory = (char*)tc_malloc(CEPH_PAGE_SIZE * number_of_pages_per_alloc);
+      // ASSERT((size_t)memory % CEPH_PAGE_SIZE == 0);
+      for (int page_number = 0; page_number < number_of_pages_per_alloc; page_number++) {
+        ThreadPage page;
+        page.capacity = CEPH_PAGE_SIZE;
+        page.memory = memory + (page_number * CEPH_PAGE_SIZE);
+
+        // update header of page
+        ThreadPageHeader* header = (ThreadPageHeader*)page.memory;
+        header->arena_pointer = arena;
+
+        // Build free list of newly allocated memory
+        FreeNode* node = (FreeNode*)page.memory + sizeof(T);
+        FreeNode* new_head = node;
+        node->next = nullptr;
+        for (size_t i = sizeof(T); i < CEPH_PAGE_SIZE; i += sizeof(T)) {
+          node->next = (FreeNode*)(page.memory + i);
+          node = node->next;
+          node->next = nullptr;
+        }
+
+        FreeNode* head = arena->head.load();
+        do {
+          head = arena->head.load();
+          node->next = head;
+          // printf("allocate: new head %p %lu\n", new_head, pthread_self());
+          // printf("check %p %p\n", new_head, new_head->next);
+        } while(!arena->head.compare_exchange_weak(head, new_head));
+        arena->pages.push_back(page);
       }
-      delete[] memory;
-      memory = new_memory;
-      capacity = new_capacity;
     }
-    FreeNode *node = head;
-    head = head->next;
-    return node;
+    FreeNode* node = arena->head.load();
+    while(arena->head.compare_exchange_weak(node, node->next) == false) {
+      node = arena->head.load();
+    }
+    return (void*)node;
+  }
+
+  ThreadArena* get_page_arena(void* pointer) {
+    ThreadPageHeader* header = (ThreadPageHeader*)((size_t)pointer & ~(CEPH_PAGE_SIZE - 1));
+    return header->arena_pointer;
   }
 
   void deallocate(void* pointer) {
-    std::lock_guard<std::mutex> l(lock);
-    FreeNode* new_head = (FreeNode*)pointer;
-    new_head->next = head;
-    head = new_head;
+    ThreadArena* page_arena = get_page_arena(pointer);
+    // page_arena->lock.lock();
+    // std::l(char*)aligned_alloc(page_size, page_size*10);ock_guard<std::mutex> l(page_arena->lock);
+    FreeNode* node = (FreeNode*)pointer;
+    FreeNode* head_node = page_arena->head.load();
+    node->next = head_node;
+    while(page_arena->head.compare_exchange_weak(head_node, node) == false) {
+      head_node = page_arena->head.load();
+      node->next = head_node;
+    }
+    // printf("free: new head %p %lu\n", node, pthread_self());
+    // printf("check %p %p\n", node, node->next);
+    // page_arena->lock.unlock();
   }
 };
 
@@ -441,17 +479,17 @@ public:
   T* allocate(size_t n, void *p = nullptr) {
     // PbProfileFunction(f, "pool_allocator::allocate");
     size_t total = sizeof(T) * n;
-    const auto shid = pick_a_shard_int();
-    auto& shard = pool->shard[shid];
-    shard.bytes += total;
-    shard.items += n;
-    if (type) {
-#if defined(WITH_SEASTAR) && !defined(WITH_ALIEN)
-      type->shards[shid].items += n;
-#else
-      type->items += n;
-#endif
-    }
+//     const auto shid = pick_a_shard_int();
+//     auto& shard = pool->shard[shid];
+//     shard.bytes += total;
+//     shard.items += n;
+//     if (type) {
+// #if defined(WITH_SEASTAR) && !defined(WITH_ALIEN)
+//       type->shards[shid].items += n;
+// #else
+//       type->items += n;
+// #endif
+//     }
 
     if (memory_allocator != nullptr) {
       T* r = reinterpret_cast<T*>(memory_allocator->allocate());
@@ -465,17 +503,17 @@ public:
   void deallocate(T* p, size_t n) {
     // PbProfileFunction(f, "pool_allocator::deallocate");
     size_t total = sizeof(T) * n;
-    const auto shid = pick_a_shard_int();
-    auto& shard = pool->shard[shid];
-    shard.bytes -= total;
-    shard.items -= n;
-    if (type) {
-#if defined(WITH_SEASTAR) && !defined(WITH_ALIEN)
-      type->shards[shid].items -= n;
-#else
-      type->items -= n;
-#endif
-    }
+//     const auto shid = pick_a_shard_int();
+//     auto& shard = pool->shard[shid];
+//     shard.bytes -= total;
+//     shard.items -= n;
+//     if (type) {
+// #if defined(WITH_SEASTAR) && !defined(WITH_ALIEN)
+//       type->shards[shid].items -= n;
+// #else
+//       type->items -= n;
+// #endif
+//     }
     if (memory_allocator != nullptr) {
       memory_allocator->deallocate(p);
     } else {

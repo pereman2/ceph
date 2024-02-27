@@ -81,3 +81,6 @@
 [submodule "src/qatzip"]
 	path = src/qatzip
 	url = https://github.com/intel/qatzip.git
+[submodule "src/tracy"]
+	path = src/tracy
+	url = https://github.com/wolfpld/tracy.git

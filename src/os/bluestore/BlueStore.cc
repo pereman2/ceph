@@ -14668,7 +14668,6 @@ int BlueStore::queue_transactions(
   ThreadPool::TPHandle *handle)
 {
   FUNCTRACE(cct);
-  // PbProfileFunction(f, "BlueStore::_txc_add_transaction");
   list<Context *> on_applied, on_commit, on_applied_sync;
   ObjectStore::Transaction::collect_contexts(
     tls, &on_applied, &on_commit, &on_applied_sync);
