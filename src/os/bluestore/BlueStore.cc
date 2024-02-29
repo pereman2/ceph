@@ -70,39 +70,48 @@
 using bid_t = decltype(BlueStore::Blob::id);
 
 // bluestore_cache_onode
-MEMPOOL_DEFINE_OBJECT_FACTORY(BlueStore::Onode, bluestore_onode,
+MEMPOOL_DEFINE_OBJECT_FACTORY_WITH_ALLOC(BlueStore::Onode, bluestore_onode,
 			      bluestore_cache_onode);
 
-MEMPOOL_DEFINE_OBJECT_FACTORY(BlueStore::Buffer, bluestore_buffer,
-			      bluestore_cache_buffer);
-MEMPOOL_DEFINE_OBJECT_FACTORY(BlueStore::Extent, bluestore_extent,
-			      bluestore_extent);
-MEMPOOL_DEFINE_OBJECT_FACTORY(BlueStore::Blob, bluestore_blob,
-			      bluestore_blob);
-MEMPOOL_DEFINE_OBJECT_FACTORY(BlueStore::SharedBlob, bluestore_shared_blob,
+MEMPOOL_DEFINE_OBJECT_FACTORY_WITH_ALLOC(BlueStore::Buffer, bluestore_buffer,
+			     bluestore_cache_buffer);
+MEMPOOL_DEFINE_OBJECT_FACTORY_WITH_ALLOC(BlueStore::Extent, bluestore_extent,
+			     bluestore_extent);
+MEMPOOL_DEFINE_OBJECT_FACTORY_WITH_ALLOC(BlueStore::Blob, bluestore_blob,
+			     bluestore_blob);
+MEMPOOL_DEFINE_OBJECT_FACTORY_WITH_ALLOC(BlueStore::SharedBlob, bluestore_shared_blob,
 			      bluestore_shared_blob);
 
+template <>
+struct mempool::UseMemoryAllocator<mempool::pool_index_t::mempool_bluestore_extent, BlueStore::Extent> : std::true_type {};
 template<mempool::pool_index_t, typename T>
 mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_extent, BlueStore::Extent>* ceph_get_memory_pool_allocator() {
   static mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_extent, BlueStore::Extent> memory_pool_allocator;
   return &memory_pool_allocator;
 }
 
+
+template <>
+struct mempool::UseMemoryAllocator<mempool::pool_index_t::mempool_bluestore_cache_buffer, BlueStore::Buffer> : std::true_type {};
 template<mempool::pool_index_t, typename T>
-mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_extent, BlueStore::Buffer>* ceph_get_memory_pool_allocator() {
-  static mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_extent, BlueStore::Buffer> memory_pool_allocator;
+mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_cache_buffer, BlueStore::Buffer>* ceph_get_memory_pool_allocator() {
+  static mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_cache_buffer, BlueStore::Buffer> memory_pool_allocator;
   return &memory_pool_allocator;
 }
 
+template <>
+struct mempool::UseMemoryAllocator<mempool::pool_index_t::mempool_bluestore_blob, BlueStore::Blob> : std::true_type {};
 template<mempool::pool_index_t, typename T>
-mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_extent, BlueStore::Blob>* ceph_get_memory_pool_allocator() {
-  static mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_extent, BlueStore::Blob> memory_pool_allocator;
+mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_blob, BlueStore::Blob>* ceph_get_memory_pool_allocator() {
+  static mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_blob, BlueStore::Blob> memory_pool_allocator;
   return &memory_pool_allocator;
 }
 
+template <>
+struct mempool::UseMemoryAllocator<mempool::pool_index_t::mempool_bluestore_shared_blob, BlueStore::SharedBlob> : std::true_type {};
 template<mempool::pool_index_t, typename T>
-mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_extent, BlueStore::SharedBlob>* ceph_get_memory_pool_allocator() {
-  static mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_extent, BlueStore::SharedBlob> memory_pool_allocator;
+mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_shared_blob, BlueStore::SharedBlob>* ceph_get_memory_pool_allocator() {
+  static mempool::CephMemoryPoolAllocator<mempool::pool_index_t::mempool_bluestore_shared_blob, BlueStore::SharedBlob> memory_pool_allocator;
   return &memory_pool_allocator;
 }
 

@@ -435,6 +435,9 @@ CephMemoryPoolAllocator<pool_ix, T>* ceph_get_memory_pool_allocator() {
   return nullptr;
 }
 
+template <pool_index_t pool_ix, typename T>
+struct UseMemoryAllocator : std::false_type {};
+
 
 // STL allocator for use with containers.  All actual state
 // is stored in the static pool_allocator_base_t, which saves us from
@@ -479,19 +482,19 @@ public:
   T* allocate(size_t n, void *p = nullptr) {
     // PbProfileFunction(f, "pool_allocator::allocate");
     size_t total = sizeof(T) * n;
-//     const auto shid = pick_a_shard_int();
-//     auto& shard = pool->shard[shid];
-//     shard.bytes += total;
-//     shard.items += n;
-//     if (type) {
-// #if defined(WITH_SEASTAR) && !defined(WITH_ALIEN)
-//       type->shards[shid].items += n;
-// #else
-//       type->items += n;
-// #endif
-//     }
+    const auto shid = pick_a_shard_int();
+    auto& shard = pool->shard[shid];
+    shard.bytes += total;
+    shard.items += n;
+    if (type) {
+#if defined(WITH_SEASTAR) && !defined(WITH_ALIEN)
+      type->shards[shid].items += n;
+#else
+      type->items += n;
+#endif
+    }
 
-    if (memory_allocator != nullptr) {
+    if constexpr (UseMemoryAllocator<pool_ix, T>::value) {
       T* r = reinterpret_cast<T*>(memory_allocator->allocate());
       return r;
     } else {
@@ -503,18 +506,18 @@ public:
   void deallocate(T* p, size_t n) {
     // PbProfileFunction(f, "pool_allocator::deallocate");
     size_t total = sizeof(T) * n;
-//     const auto shid = pick_a_shard_int();
-//     auto& shard = pool->shard[shid];
-//     shard.bytes -= total;
-//     shard.items -= n;
-//     if (type) {
-// #if defined(WITH_SEASTAR) && !defined(WITH_ALIEN)
-//       type->shards[shid].items -= n;
-// #else
-//       type->items -= n;
-// #endif
-//     }
-    if (memory_allocator != nullptr) {
+    const auto shid = pick_a_shard_int();
+    auto& shard = pool->shard[shid];
+    shard.bytes -= total;
+    shard.items -= n;
+    if (type) {
+#if defined(WITH_SEASTAR) && !defined(WITH_ALIEN)
+      type->shards[shid].items -= n;
+#else
+      type->items -= n;
+#endif
+    }
+    if constexpr (UseMemoryAllocator<pool_ix, T>::value) {
       memory_allocator->deallocate(p);
     } else {
       delete[] reinterpret_cast<char*>(p);
@@ -717,6 +720,17 @@ bool operator!=(const std::vector<T, mempool::pool_allocator<pool_index, T>>& lh
 // Use this in some particular .cc file to match each class with a
 // MEMPOOL_CLASS_HELPERS().
 #define MEMPOOL_DEFINE_OBJECT_FACTORY(obj,factoryname,pool)		\
+  MEMPOOL_DEFINE_FACTORY(obj, factoryname, pool)			\
+  void *obj::operator new(size_t size) {				\
+    return mempool::pool::alloc_##factoryname.allocate(1); \
+  }									\
+  void obj::operator delete(void *p)  {					\
+    return mempool::pool::alloc_##factoryname.deallocate((obj*)p, 1);	\
+  }
+
+// Use this in some particular .cc file to match each class with a
+// MEMPOOL_CLASS_HELPERS().
+#define MEMPOOL_DEFINE_OBJECT_FACTORY_WITH_ALLOC(obj,factoryname,pool)		\
   MEMPOOL_DEFINE_FACTORY(obj, factoryname, pool)			\
   void *obj::operator new(size_t size) {				\
     return mempool::pool::alloc_##factoryname.allocate(1); \
