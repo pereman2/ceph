@@ -1858,40 +1858,47 @@ int RocksDBStore::get(
     const std::set<string> &keys,
     std::map<string, bufferlist> *out)
 {
-  rocksdb::PinnableSlice value;
+  int r = 0;
+
   utime_t start = ceph_clock_now();
-  if (cf_handles.count(prefix) > 0) {
-    for (auto& key : keys) {
-      auto cf_handle = get_cf_handle(prefix, key);
-      auto status = db->Get(rocksdb::ReadOptions(),
-			    cf_handle,
-			    rocksdb::Slice(key),
-			    &value);
-      if (status.ok()) {
-	(*out)[key].append(value.data(), value.size());
-      } else if (status.IsIOError()) {
-	ceph_abort_msg(status.getState());
-      }
-      value.Reset();
+
+  std::vector<rocksdb::Slice> key_slices;
+  key_slices.reserve(keys.size());
+  std::vector<rocksdb::ColumnFamilyHandle*> cf_families;
+  cf_families.reserve(keys.size());
+  std::vector<string> results;
+
+  bool prefix_ok = cf_handles.count(prefix) > 0;
+
+  for (auto& key : keys) {
+    rocksdb::ColumnFamilyHandle* column_familiy = default_cf;
+    if (prefix_ok) {
+      column_familiy = get_cf_handle(prefix, key);
+
     }
-  } else {
-    for (auto& key : keys) {
-      string k = combine_strings(prefix, key);
-      auto status = db->Get(rocksdb::ReadOptions(),
-			    default_cf,
-			    rocksdb::Slice(k),
-			    &value);
-      if (status.ok()) {
-	(*out)[key].append(value.data(), value.size());
-      } else if (status.IsIOError()) {
-	ceph_abort_msg(status.getState());
-      }
-      value.Reset();
-    }
+    cf_families.push_back(column_familiy);
+    key_slices.push_back(rocksdb::Slice(key));
   }
+
+  std::vector<rocksdb::Status> statuses = db->MultiGet(rocksdb::ReadOptions(), cf_families, key_slices, &results);
+
+  size_t i = 0;
+  for (auto& key : keys) {
+    auto& status = statuses[i];
+    auto& value = results[i];
+    if (status.ok()) {
+      (*out)[key].append(value.data(), value.size());
+    } else if (status.IsIOError()) {
+      ceph_abort_msg(status.getState());
+    } else if (status.IsNotFound()) {
+      r = -ENOENT;
+    }
+    i++;
+  }
+
   utime_t lat = ceph_clock_now() - start;
   logger->tinc(l_rocksdb_get_latency, lat);
-  return 0;
+  return r;
 }
 
 int RocksDBStore::get(

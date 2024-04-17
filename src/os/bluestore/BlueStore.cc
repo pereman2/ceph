@@ -4192,6 +4192,8 @@ void BlueStore::ExtentMap::fault_range(
   ceph_assert(start >= 0);
 
   string key;
+  std::set<std::string> shards_to_load;
+  std::map<std::string, Shard*> shard_map;
   while (start <= last) {
     ceph_assert((size_t)start < shards.size());
     auto p = &shards[start];
@@ -4202,28 +4204,38 @@ void BlueStore::ExtentMap::fault_range(
       generate_extent_shard_key_and_apply(
 	onode->key, p->shard_info->offset, &key,
         [&](const string& final_key) {
-          int r = db->get(PREFIX_OBJ, final_key, &v);
-          if (r < 0) {
-	    derr << __func__ << " missing shard 0x" << std::hex
-		 << p->shard_info->offset << std::dec << " for " << onode->oid
-		 << dendl;
-	    ceph_assert(r >= 0);
-          }
+          shards_to_load.insert(final_key);
+          shard_map.insert({final_key, p});
         }
       );
-      p->extents = decode_some(v);
-      p->loaded = true;
-      dout(20) << __func__ << " open shard 0x" << std::hex
-	       << p->shard_info->offset
-	       << " for range 0x" << offset << "~" << length << std::dec
-	       << " (" << v.length() << " bytes)" << dendl;
-      ceph_assert(p->dirty == false);
-      ceph_assert(v.length() == p->shard_info->bytes);
       onode->c->store->logger->inc(l_bluestore_onode_shard_misses);
     } else {
       onode->c->store->logger->inc(l_bluestore_onode_shard_hits);
     }
     ++start;
+  }
+
+  std::map<std::string, bufferlist> results;
+  int r = db->get(PREFIX_OBJ, shards_to_load, &results);
+  if (r < 0) {
+    derr << __func__ << " missing shard 0x" 
+      << dendl;
+      // << std::hex
+      // << p->shard_info->offset << std::dec << " for " << onode->oid
+    ceph_assert(r >= 0);
+  }
+  for (auto& final_key : shards_to_load) {
+    auto p = shard_map[final_key];
+    auto value = results[final_key];
+    p->extents = decode_some(value);
+    p->loaded = true;
+    dout(20) << __func__ << " open shard 0x" << std::hex
+      << p->shard_info->offset
+      << " for range 0x" << offset << "~" << length << std::dec
+      << " (" << value.length() << " bytes)" << dendl;
+    ceph_assert(p->dirty == false);
+    ceph_assert(value.length() == p->shard_info->bytes);
+
   }
 }
 
