@@ -1880,7 +1880,9 @@ int RocksDBStore::get(
     key_slices.push_back(rocksdb::Slice(key));
   }
 
-  std::vector<rocksdb::Status> statuses = db->MultiGet(rocksdb::ReadOptions(), cf_families, key_slices, &results);
+  auto read_options = rocksdb::ReadOptions();
+  read_options.async_io = true;
+  std::vector<rocksdb::Status> statuses = db->MultiGet(read_options, cf_families, key_slices, &results);
 
   size_t i = 0;
   for (auto& key : keys) {
