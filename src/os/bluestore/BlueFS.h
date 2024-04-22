@@ -253,9 +253,14 @@ public:
         return offset + sizeof(WALLength);
       }
 
-      static constexpr uint64_t write_extra_envelope_size() {
-        return sizeof(WALLength)  // prepended first length field
+      static constexpr uint64_t extra_envelope_size_on_front_and_tail() {
+        return sizeof(WALLength) // prepended flush length
           + sizeof(WALMarker) // appended file marker == ino
+          + sizeof(WALLengthZero); // extra 0 overwrite of next WALLength
+      }
+
+      static constexpr uint64_t extra_envelope_size_on_tail() {
+        return sizeof(WALMarker) // appended file marker == ino
           + sizeof(WALLengthZero); // extra 0 overwrite of next WALLength
       }
 
@@ -399,6 +404,10 @@ public:
       uint64_t l0 = get_buffer_length();
       ceph_assert(l0 + sizeof(value) <= std::numeric_limits<unsigned>::max());
       buffer_appender.append((const char*)&value, sizeof(value));
+    }
+
+    void append_hole(uint64_t len) {
+      buffer.append_hole(len);
     }
 
     void prepend(uint64_t value) {

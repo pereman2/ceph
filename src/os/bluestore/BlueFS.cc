@@ -3605,8 +3605,9 @@ int BlueFS::_flush_range_F(FileWriter *h, uint64_t offset, uint64_t length)
   ceph_assert(h->file->fnode.ino > 1);
 
   if (h->file->is_wal) {
+    // WALFlush::WALLength is already appended at the start of first append_try_flush
     // update length, offset is already updated with correct position
-    length += File::WALFlush::write_extra_envelope_size();
+    length += File::WALFlush::extra_envelope_size_on_tail();
   }
   uint64_t end = offset + length;
 
@@ -3671,12 +3672,12 @@ int BlueFS::_flush_range_F(FileWriter *h, uint64_t offset, uint64_t length)
   }
 
   if (h->file->is_wal) {
-    dout(30) << "dump before appends:\n";
-    h->buffer.hexdump(*_dout);
-    *_dout << dendl;
     // create WAL flush envelope 
-    uint64_t flush_size = length - File::WALFlush::write_extra_envelope_size();
-    h->prepend((File::WALFlush::WALLength)flush_size);
+    // h->prepend((File::WALFlush::WALLength)flush_size);
+    uint64_t flush_size = length - File::WALFlush::extra_envelope_size_on_front_and_tail();
+    File::WALFlush::WALLength* pointer_to_flush_length = (File::WALFlush::WALLength*) h->buffer.c_str();
+    (*pointer_to_flush_length) = flush_size;
+
     h->append((File::WALFlush::WALMarker)h->file->fnode.ino);
     h->append_zero(sizeof(File::WALFlush::WALLengthZero));
     h->file->wal_flushes.push_back({h->pos, flush_size});
@@ -3816,6 +3817,11 @@ void BlueFS::append_try_flush(FileWriter *h, const char* buf, size_t len)/*_WF_L
   bool flushed_sum = false;
   {
     std::unique_lock hl(h->lock);
+
+    if (h->file->is_wal && h->get_buffer_length() == 0) {
+      h->append_hole(sizeof(File::WALFlush::WALLength));
+    }
+
     size_t max_size = 1ull << 30; // cap to 1GB
     while (len > 0) {
       bool need_flush = true;
