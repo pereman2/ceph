@@ -267,6 +267,7 @@ public:
 
     };
 
+
     bluefs_fnode_t fnode;
     int refs;
     uint64_t dirty_seq;
@@ -274,10 +275,6 @@ public:
     bool deleted;
     bool is_dirty;
     bool is_wal;
-    std::vector<WALFlush> wal_flushes; // to keep track of the amount of flushes we performed on a WAL file
-                                       // so that we can easily recalculate real data offsets.
-                                       // On "replay" this should be refilled in order to append data
-                                       // correctly. Nevertheless, replayed wal file most probably won't be reused.
     boost::intrusive::list_member_hook<> dirty_item;
 
     std::atomic_int num_readers, num_writers;
@@ -289,6 +286,12 @@ public:
        Does not need to be taken when doing one-time operations:
        _replay, device_migrate_to_existing, device_migrate_to_new */
     ceph::mutex lock = ceph::make_mutex("BlueFS::File::lock");
+
+    bool is_wal_read_loaded; // mark whether the WAL file is ready to be read as wal_update_size was called 
+    std::vector<WALFlush> wal_flushes; // to keep track of the amount of flushes we performed on a WAL file
+                                       // so that we can easily recalculate real data offsets.
+                                       // On "replay" this should be refilled in order to append data
+                                       // correctly. Nevertheless, replayed wal file most probably won't be reused.
 
   private:
     FRIEND_MAKE_REF(File);
@@ -303,7 +306,8 @@ public:
 	num_readers(0),
 	num_writers(0),
 	num_reading(0),
-        vselector_hint(nullptr)
+        vselector_hint(nullptr),
+        is_wal_read_loaded(false)
       {}
     ~File() override {
       ceph_assert(num_readers.load() == 0);
