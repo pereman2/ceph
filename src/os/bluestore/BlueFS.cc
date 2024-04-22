@@ -1521,6 +1521,7 @@ int BlueFS::_replay(bool noop, bool to_stdout)
             if (boost::algorithm::ends_with(filename, ".log")) {
               file->is_wal = true;
               file->fnode.size = 0;
+              file->is_wal_read_loaded = true;
               file->wal_flushes.clear();
               _wal_update_size(file);
             }
@@ -2241,6 +2242,7 @@ int64_t BlueFS::_read_random(
 }
 
 void BlueFS::_wal_update_size(FileRef file) {
+  ceph_assert(file->is_wal_read_loaded);
   uint64_t current_size = file->fnode.size;
   uint64_t flush_offset = current_size;
 
@@ -2252,10 +2254,6 @@ void BlueFS::_wal_update_size(FileRef file) {
     _read(h, flush_offset, sizeof(File::WALFlush::WALLength), &bl, nullptr);
     uint64_t flush_length = 0;
     ceph_assert(bl.length() >= sizeof(File::WALFlush::WALLength));
-
-    dout(30) << "length dump\n";
-    bl.hexdump(*_dout);
-    *_dout << dendl;
 
     flush_length = *((uint64_t*)bl.c_str());
     dout(20) << __func__ << " flush_length " << flush_length << dendl;
@@ -3673,14 +3671,12 @@ int BlueFS::_flush_range_F(FileWriter *h, uint64_t offset, uint64_t length)
 
   if (h->file->is_wal) {
     // create WAL flush envelope 
-    // h->prepend((File::WALFlush::WALLength)flush_size);
     uint64_t flush_size = length - File::WALFlush::extra_envelope_size_on_front_and_tail();
     File::WALFlush::WALLength* pointer_to_flush_length = (File::WALFlush::WALLength*) h->buffer.c_str();
     (*pointer_to_flush_length) = flush_size;
 
     h->append((File::WALFlush::WALMarker)h->file->fnode.ino);
     h->append_zero(sizeof(File::WALFlush::WALLengthZero));
-    h->file->wal_flushes.push_back({h->pos, flush_size});
   } 
 
   dout(20) << __func__ << " file now, unflushed " << h->file->fnode << dendl;
@@ -4312,6 +4308,7 @@ int BlueFS::open_for_write(
     file->vselector_hint = vselector->get_hint_by_dir(dirname);
     if (boost::algorithm::ends_with(filename, ".log")) {
       file->is_wal = true;
+      file->is_wal_read_loaded = false;
     }
     nodes.file_map[ino_last] = file;
     dir->file_map.emplace_hint(q, string{filename}, file);
@@ -4580,6 +4577,7 @@ int BlueFS::stat(std::string_view dirname, std::string_view filename,
   if (size)
     *size = file->fnode.size;
   if (file->is_wal) {
+    ceph_assert(file->is_wal_read_loaded);
     *size = file->fnode.size - (file->wal_flushes.size() * (sizeof(File::WALFlush::WALLength) + sizeof(File::WALFlush::WALMarker)));
   }
   if (mtime)
