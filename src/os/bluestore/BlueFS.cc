@@ -1559,7 +1559,6 @@ int BlueFS::_replay(bool noop, bool to_stdout)
             vselector->add_usage(file->vselector_hint, file->fnode);
 
             if (boost::algorithm::ends_with(filename, ".log")) {
-              file->is_wal = true;
               file->fnode.size = 0;
               file->is_wal_read_loaded = true;
               file->wal_flushes.clear();
@@ -1641,6 +1640,7 @@ int BlueFS::_replay(bool noop, bool to_stdout)
         {
 	  bluefs_fnode_t fnode;
 	  decode(fnode, p);
+          ceph_assert(fnode.type == 0 || fnode.type == 1);
 	  dout(20) << __func__ << " 0x" << std::hex << pos << std::dec
                    << ":  op_file_update " << " " << fnode << " " << dendl;
           if (unlikely(to_stdout)) {
@@ -1712,7 +1712,7 @@ int BlueFS::_replay(bool noop, bool to_stdout)
 	      vselector->sub_usage(f->vselector_hint, fnode);
 	    }
 	    fnode.claim_extents(delta.extents);
-            if (f->is_wal) {
+            if (f->is_new_wal()) {
               _wal_update_size(f); // fnode.allocate must be updated
             } else {
               fnode.size = delta.size;
@@ -3550,7 +3550,7 @@ ceph::bufferlist BlueFS::FileWriter::flush_buffer(
              << " unflushed" << dendl;
   }
   uint64_t extra_if_wal = 0;
-  if (file->is_wal) {
+  if (file->is_new_wal()) {
     extra_if_wal = sizeof(File::WALFlush::WALLengthZero);
   }
   unsigned padding_len = 0;
@@ -3642,7 +3642,7 @@ int BlueFS::_flush_range_F(FileWriter *h, uint64_t offset, uint64_t length)
   ceph_assert(h->file->num_readers.load() == 0);
   ceph_assert(h->file->fnode.ino > 1);
 
-  if (h->file->is_wal) {
+  if (h->file->is_new_wal()) {
     // WALFlush::WALLength is already appended at the start of first append_try_flush
     // update length, offset is already updated with correct position
     length += File::WALFlush::extra_envelope_size_on_tail();
@@ -3665,7 +3665,7 @@ int BlueFS::_flush_range_F(FileWriter *h, uint64_t offset, uint64_t length)
     return 0;
   if (offset < h->pos) {
     // NOTE: let's assume that we do not overwrite wal
-    ceph_assert(!h->file->is_wal);
+    ceph_assert(!h->file->is_new_wal());
     length -= h->pos - offset;
     offset = h->pos;
     dout(10) << " still need 0x"
@@ -3700,16 +3700,16 @@ int BlueFS::_flush_range_F(FileWriter *h, uint64_t offset, uint64_t length)
   if (h->file->fnode.size < end) {
     vselector->add_usage(h->file->vselector_hint, end - h->file->fnode.size);
     h->file->fnode.size = end;
-    if (h->file->is_wal) {
+    if (h->file->is_new_wal()) {
       h->file->fnode.size -= sizeof(File::WALFlush::WALLengthZero); // don't account extra 0 appended at the end
     }
     // new write path for wal does not require dirtying file on append
-    if (!h->file->is_wal) {
+    if (!h->file->is_new_wal()) {
       h->file->is_dirty = true;
     }
   }
 
-  if (h->file->is_wal) {
+  if (h->file->is_new_wal()) {
     // create WAL flush envelope 
     uint64_t flush_size = length - File::WALFlush::extra_envelope_size_on_front_and_tail();
     File::WALFlush::WALLength* pointer_to_flush_length = (File::WALFlush::WALLength*) h->buffer.c_str();
@@ -3755,7 +3755,7 @@ int BlueFS::_flush_data(FileWriter *h, uint64_t offset, uint64_t length, bool bu
   auto bl = h->flush_buffer(cct, partial, length, super);
   ceph_assert(bl.length() >= length);
   h->pos = offset + length;
-  if (h->file->is_wal) {
+  if (h->file->is_new_wal()) {
     h->pos -= sizeof(File::WALFlush::WALLengthZero); // wal files overwrite next flush_size field
                                                      // we don't need to account it as those 8 bytes aren't really written
   }
@@ -3854,7 +3854,7 @@ void BlueFS::append_try_flush(FileWriter *h, const char* buf, size_t len)/*_WF_L
   {
     std::unique_lock hl(h->lock);
 
-    if (h->file->is_wal && h->get_buffer_length() == 0) {
+    if (h->file->is_new_wal() && h->get_buffer_length() == 0) {
       h->append_hole(sizeof(File::WALFlush::WALLength));
     }
 
@@ -4347,7 +4347,7 @@ int BlueFS::open_for_write(
     file->fnode.ino = ++ino_last;
     file->vselector_hint = vselector->get_hint_by_dir(dirname);
     if (boost::algorithm::ends_with(filename, ".log")) {
-      file->is_wal = true;
+      file->fnode.type = WAL_V2;
       file->is_wal_read_loaded = false;
     }
     nodes.file_map[ino_last] = file;
@@ -4394,6 +4394,7 @@ int BlueFS::open_for_write(
   *h = _create_writer(file);
 
   if (boost::algorithm::ends_with(filename, ".log")) {
+    file->fnode.type = WAL_V2;
     (*h)->writer_type = BlueFS::WRITER_WAL;
     if (logger && !overwrite) {
       logger->inc(l_bluefs_files_written_wal);
@@ -4498,9 +4499,6 @@ int BlueFS::open_for_read(
     return -ENOENT;
   }
   File *file = q->second.get();
-  if (boost::algorithm::ends_with(filename, ".log")) {
-    file->is_wal = true;
-  }
 
   *h = new FileReader(file, random ? 4096 : cct->_conf->bluefs_max_prefetch,
 		      random, false);
@@ -4625,7 +4623,7 @@ int BlueFS::stat(std::string_view dirname, std::string_view filename,
 	   << " " << file->fnode << dendl;
   if (size)
     *size = file->fnode.size;
-  if (file->is_wal) {
+  if (file->is_new_wal()) {
     ceph_assert(file->is_wal_read_loaded);
     *size = file->fnode.size - (file->wal_flushes.size() * (sizeof(File::WALFlush::WALLength) + sizeof(File::WALFlush::WALMarker)));
   }

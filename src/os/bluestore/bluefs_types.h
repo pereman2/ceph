@@ -58,11 +58,17 @@ WRITE_CLASS_DENC(bluefs_fnode_delta_t)
 
 std::ostream& operator<<(std::ostream& out, const bluefs_fnode_delta_t& delta);
 
+enum bluefs_node_type {
+  LEGACY = 0,
+  WAL_V2 = 1,
+  NODE_TYPE_END = 0x100,
+};
+
 struct bluefs_fnode_t {
   uint64_t ino;
   uint64_t size;
   utime_t mtime;
-  uint8_t __unused__ = 0; // was prefer_bdev
+  uint8_t type = 0; // was prefer_bdev
   mempool::bluefs::vector<bluefs_extent_t> extents;
 
   // precalculated logical offsets for extents vector entries
@@ -115,7 +121,7 @@ struct bluefs_fnode_t {
     denc_varint(v.ino, p);
     denc_varint(v.size, p);
     denc(v.mtime, p);
-    denc(v.__unused__, p);
+    denc(v.type, p);
     denc(v.extents, p);
     DENC_FINISH(p);
   }

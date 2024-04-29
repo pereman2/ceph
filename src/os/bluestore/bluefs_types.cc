@@ -213,17 +213,23 @@ void bluefs_fnode_t::generate_test_instances(list<bluefs_fnode_t*>& ls)
   ls.back()->size = 1048576;
   ls.back()->mtime = utime_t(123,45);
   ls.back()->extents.push_back(bluefs_extent_t(0, 1048576, 4096));
-  ls.back()->__unused__ = 1;
+  ls.back()->type = 0;
 }
 
 ostream& operator<<(ostream& out, const bluefs_fnode_t& file)
 {
+  static constexpr std::string_view node_types[] =  {
+    "LEGACY",
+    "WAL_V2",
+  };
+
   return out << "file(ino " << file.ino
 	     << " size 0x" << std::hex << file.size << std::dec
 	     << " mtime " << file.mtime
 	     << " allocated " << std::hex << file.allocated << std::dec
 	     << " alloc_commit " << std::hex << file.allocated_commited << std::dec
 	     << " extents " << file.extents
+	     << " type " << node_types[file.type] << std::dec
 	     << ")";
 }
 
@@ -316,4 +322,3 @@ ostream& operator<<(ostream& out, const bluefs_transaction_t& t)
 	     << " crc 0x" << t.op_bl.crc32c(-1)
 	     << std::dec << ")";
 }
-

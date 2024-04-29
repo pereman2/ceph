@@ -274,7 +274,6 @@ public:
     bool locked;
     bool deleted;
     bool is_dirty;
-    bool is_wal;
     boost::intrusive::list_member_hook<> dirty_item;
 
     std::atomic_int num_readers, num_writers;
@@ -302,7 +301,6 @@ public:
 	locked(false),
 	deleted(false),
 	is_dirty(false),
-        is_wal(false),
 	num_readers(0),
 	num_writers(0),
 	num_reading(0),
@@ -315,6 +313,12 @@ public:
       ceph_assert(num_reading.load() == 0);
       ceph_assert(!locked);
     }
+
+  public:
+    bool is_new_wal() {
+      return fnode.type == WAL_V2;
+    }
+
   };
   using FileRef = ceph::ref_t<File>;
 
@@ -829,7 +833,7 @@ public:
     // no need to hold the global lock here; we only touch h and
     // h->file, and read vs write or delete is already protected (via
     // atomics and asserts).
-    if (h->file->is_wal) {
+    if (h->file->is_new_wal()) {
       return _read_wal(h, offset, len, outbl, out);
     }
     return _read(h, offset, len, outbl, out);
