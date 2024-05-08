@@ -117,7 +117,7 @@ struct bluefs_fnode_t {
   template<typename T, typename P>
   friend std::enable_if_t<std::is_same_v<bluefs_fnode_t, std::remove_const_t<T>>>
   _denc_friend(T& v, P& p) {
-    DENC_START(1, 1, p);
+    DENC_START(2, 2, p);
     denc_varint(v.ino, p);
     denc_varint(v.size, p);
     denc(v.mtime, p);
