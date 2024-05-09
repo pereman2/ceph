@@ -954,14 +954,18 @@ TEST(BlueFS, test_wal_write) {
   fs.append_try_flush(writer, bl1.c_str(), bl1.length());
   fs.fsync(writer);
 
+  // WAL files don't update internal extents while writing to save memory, only on _replay
+  fs.umount();
+  fs.mount();
+
   BlueFS::FileReader *reader;
   ASSERT_EQ(0, fs.open_for_read(dir_db, wal_file, &reader));
   bufferlist read_bl;
   fs.read(reader, 0, 70000, &read_bl, NULL);
   ASSERT_TRUE(bl_eq(bl1, read_bl));
   delete reader;
-
   fs.umount();
+
 }
 
 TEST(BlueFS, test_wal_write_multiple) {
@@ -1004,6 +1008,10 @@ TEST(BlueFS, test_wal_write_multiple) {
     gen_debugable(buffer_size, bl1, 'a' + i);
     fs.append_try_flush(writer, bl1.c_str(), bl1.length());
     fs.fsync(writer);
+
+    // WAL files don't update internal extents while writing to save memory
+    fs.umount();
+    fs.mount();
 
     BlueFS::FileReader *reader;
     ASSERT_EQ(0, fs.open_for_read(dir_db, wal_file, &reader));
