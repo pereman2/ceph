@@ -239,15 +239,19 @@ public:
     struct WALFlush {
       typedef uint64_t WALMarker; 
       typedef uint64_t WALLength; 
-      typedef WALLength WALLengthZero; 
 
       uint64_t offset = 0; // offset of start of flush, it should be length offset
       WALLength length = 0;
 
       WALFlush(uint64_t offset, uint64_t length) : offset(offset), length(length) {}
 
+
       uint64_t get_marker_offset() {
         return offset + sizeof(WALLength) + length;
+      }
+
+      uint64_t end_offset() {
+        return get_marker_offset() + sizeof(WALMarker);
       }
 
       uint64_t get_payload_offset() {
@@ -256,13 +260,11 @@ public:
 
       static constexpr uint64_t extra_envelope_size_on_front_and_tail() {
         return sizeof(WALLength) // prepended flush length
-          + sizeof(WALMarker) // appended file marker == ino
-          + sizeof(WALLengthZero); // extra 0 overwrite of next WALLength
+          + sizeof(WALMarker); // appended file marker == ino
       }
 
       static constexpr uint64_t extra_envelope_size_on_tail() {
-        return sizeof(WALMarker) // appended file marker == ino
-          + sizeof(WALLengthZero); // extra 0 overwrite of next WALLength
+        return sizeof(WALMarker); // appended file marker == ino
       }
 
     };
@@ -673,7 +675,7 @@ private:
   int _preallocate(FileRef f, uint64_t off, uint64_t len);
   int _truncate(FileWriter *h, uint64_t off);
 
-  void _wal_update_size(FileRef file);
+  void _wal_update_size(FileRef file, uint64_t flush_offset, uint64_t increment);
 
   int64_t _read_wal(
     FileReader *h,   ///< [in] read from here
