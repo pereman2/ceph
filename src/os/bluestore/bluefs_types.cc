@@ -218,9 +218,9 @@ void bluefs_fnode_t::generate_test_instances(list<bluefs_fnode_t*>& ls)
 
 ostream& operator<<(ostream& out, const bluefs_fnode_t& file)
 {
-  static constexpr std::string_view node_types[] =  {
-    "LEGACY",
-    "WAL_V2",
+  static constexpr std::string_view node_type_extra_data[] =  {
+    "",
+    " type WAL_V2",
   };
 
   return out << "file(ino " << file.ino
@@ -229,7 +229,7 @@ ostream& operator<<(ostream& out, const bluefs_fnode_t& file)
 	     << " allocated " << std::hex << file.allocated << std::dec
 	     << " alloc_commit " << std::hex << file.allocated_commited << std::dec
 	     << " extents " << file.extents
-	     << " type " << node_types[file.type] << std::dec
+	     << node_type_extra_data[file.type] << std::dec
 	     << ")";
 }
 
