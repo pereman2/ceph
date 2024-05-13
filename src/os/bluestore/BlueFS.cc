@@ -2288,7 +2288,7 @@ void BlueFS::_wal_update_size(FileRef file) {
 
   FileReader *h = new FileReader(file, cct->_conf->bluefs_max_prefetch, false, true);
 
-  while(flush_offset < file->fnode.allocated) {
+  while (flush_offset < file->fnode.allocated) {
     // read first part of wal flush
     bufferlist bl;
     _read(h, flush_offset, sizeof(File::WALFlush::WALLength), &bl, nullptr);
@@ -2307,6 +2307,7 @@ void BlueFS::_wal_update_size(FileRef file) {
     file->wal_flushes.push_back({flush_offset, flush_length});
     flush_offset += increase;
   }
+  delete h;
 }
 
 int64_t BlueFS::_read_wal(
