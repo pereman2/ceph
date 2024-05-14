@@ -33,6 +33,12 @@ public:
 };
 WRITE_CLASS_DENC(bluefs_extent_t)
 
+enum bluefs_node_type {
+  LEGACY = 0,
+  WAL_V2 = 1,
+  NODE_TYPE_END = 0x100,
+};
+
 std::ostream& operator<<(std::ostream& out, const bluefs_extent_t& e);
 
 struct bluefs_fnode_delta_t {
@@ -42,27 +48,41 @@ struct bluefs_fnode_delta_t {
   uint64_t offset; // Contains offset in file of extents.
                    // Equal to 'allocated' when created.
                    // Used for consistency checking.
+
+  // only relevant in case of wal node
+  uint64_t wal_limit;
+  uint64_t wal_size;
+  uint8_t type; // bluefs_node_type. don't encode this.
+
+
   mempool::bluefs::vector<bluefs_extent_t> extents;
 
   DENC(bluefs_fnode_delta_t, v, p) {
-    DENC_START(1, 1, p);
+    uint8_t version = 1, compat = 1;
+    if (v.type == WAL_V2) {
+      version = 2;
+      compat = 2;
+    }
+    DENC_START(version, compat, p);
+
     denc_varint(v.ino, p);
     denc_varint(v.size, p);
     denc(v.mtime, p);
     denc(v.offset, p);
     denc(v.extents, p);
+
+    denc(v.type, p);
+    if (v.type == WAL_V2) {
+      denc(v.wal_limit, p);
+      denc(v.wal_size, p);
+    }
+
     DENC_FINISH(p);
   }
 };
 WRITE_CLASS_DENC(bluefs_fnode_delta_t)
 
 std::ostream& operator<<(std::ostream& out, const bluefs_fnode_delta_t& delta);
-
-enum bluefs_node_type {
-  LEGACY = 0,
-  WAL_V2 = 1,
-  NODE_TYPE_END = 0x100,
-};
 
 struct bluefs_fnode_t {
   uint64_t ino;
@@ -77,14 +97,18 @@ struct bluefs_fnode_t {
 
   uint64_t allocated;
   uint64_t allocated_commited;
+  uint64_t wal_limit; // EOF of wal, this limit represents upper limit of fnode.size, not upper limit of wal_size
+  uint64_t wal_size; // Size we expect is in WAL, there could be more on power off instances in range of wal_size~wal_limit
 
-  bluefs_fnode_t() : ino(0), size(0), allocated(0), allocated_commited(0) {}
+  bluefs_fnode_t() : ino(0), size(0), allocated(0), allocated_commited(0), wal_limit(0), wal_size(0) {}
   bluefs_fnode_t(uint64_t _ino, uint64_t _size, utime_t _mtime) :
-    ino(_ino), size(_size), mtime(_mtime), allocated(0), allocated_commited(0) {}
+    ino(_ino), size(_size), mtime(_mtime), allocated(0), allocated_commited(0), wal_limit(0), wal_size(0) {}
   bluefs_fnode_t(const bluefs_fnode_t& other) :
     ino(other.ino), size(other.size), mtime(other.mtime),
     allocated(other.allocated),
-    allocated_commited(other.allocated_commited) {
+    allocated_commited(other.allocated_commited),
+    wal_limit(other.wal_limit),
+    wal_size(other.wal_size) {
     clone_extents(other);
   }
 
@@ -129,6 +153,10 @@ struct bluefs_fnode_t {
     denc(v.mtime, p);
     denc(v.type, p);
     denc(v.extents, p);
+    if (v.type == WAL_V2) {
+      denc(v.wal_limit, p);
+      denc(v.wal_size, p);
+    }
     DENC_FINISH(p);
   }
   void reset_delta() {

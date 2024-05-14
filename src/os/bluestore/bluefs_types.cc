@@ -177,6 +177,10 @@ bluefs_fnode_delta_t* bluefs_fnode_t::make_delta(bluefs_fnode_delta_t* delta) {
   delta->mtime = mtime;
   delta->offset = allocated_commited;
   delta->extents.clear();
+
+  delta->type = type;
+  delta->wal_limit = wal_limit;
+  delta->wal_size = wal_size;
   if (allocated_commited < allocated) {
     uint64_t x_off = 0;
     auto p = seek(allocated_commited, &x_off);
@@ -223,14 +227,19 @@ ostream& operator<<(ostream& out, const bluefs_fnode_t& file)
     " type WAL_V2",
   };
 
-  return out << "file(ino " << file.ino
+  out << "file(ino " << file.ino
 	     << " size 0x" << std::hex << file.size << std::dec
 	     << " mtime " << file.mtime
 	     << " allocated " << std::hex << file.allocated << std::dec
 	     << " alloc_commit " << std::hex << file.allocated_commited << std::dec
-	     << " extents " << file.extents
-	     << node_type_extra_data[file.type] << std::dec
-	     << ")";
+	     << " extents " << file.extents;
+  if (file.type == WAL_V2) {
+    out << " wal_limit " << file.wal_limit << std::hex;
+    out << " wal_size " << file.wal_size << std::hex;
+    out << node_type_extra_data[file.type] << std::dec;
+  }
+  out << ")";
+  return out;
 }
 
 // bluefs_fnode_delta_t
