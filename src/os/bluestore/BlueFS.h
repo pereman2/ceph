@@ -236,6 +236,19 @@ public:
   struct File : public RefCountedObject {
     MEMPOOL_CLASS_HELPERS();
 
+    /*
+     * WAL files in bluefs have a different format from normal ones. In order to not flush metadata 
+     * for every write we make to data extents, we create a package/envelope around the real data 
+     * that includes Length of the data we want to flush and a marker that identifies the flush.
+     *
+     * The format on disk will look something like:
+     * legend = l = length of flush, d = data, m = marker, x=unused/used bvy other file, each character will be a byte
+     * 
+     * flush 0 l==24                                                  flush 1 l==4                 flush 2 l==12
+     * v                                                               v                             v
+     * llll llll dddd dddd dddd dddd dddd dddd mmmm mmmm xxxx xxx xxxx llll llll dddd mmmm mmmm xxxx llll llll  dddd dddd dddd mmmm mmmm
+     *
+     */
     struct WALFlush {
       typedef uint64_t WALMarker; 
       typedef uint64_t WALLength; 
