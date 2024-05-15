@@ -57,7 +57,36 @@ struct bluefs_fnode_delta_t {
 
   mempool::bluefs::vector<bluefs_extent_t> extents;
 
-  DENC(bluefs_fnode_delta_t, v, p) {
+  DENC_HELPERS
+
+  void bound_encode(size_t& p) const {
+    _denc_friend(*this, p);
+  }
+  void encode(ceph::buffer::list::contiguous_appender& p) const {
+    DENC_DUMP_PRE(bluefs_fnode_t);
+    _denc_friend(*this, p);
+  }
+  void decode(ceph::buffer::ptr::const_iterator& p) {
+    DENC_START(2, 2, p);
+    denc_varint(ino, p);
+    denc_varint(size, p);
+    denc(mtime, p);
+    denc(offset, p);
+    denc(extents, p);
+
+    denc(type, p);
+    if (type == WAL_V2) {
+      ceph_assert(struct_v == 2 && struct_compat == 2);
+      denc(wal_limit, p);
+      denc(wal_size, p);
+    }
+    DENC_FINISH(p);
+
+  }
+
+  template<typename T, typename P>
+  friend std::enable_if_t<std::is_same_v<bluefs_fnode_delta_t, std::remove_const_t<T>>>
+  _denc_friend(T& v, P& p) {
     uint8_t version = 1, compat = 1;
     if (v.type == WAL_V2) {
       version = 2;
@@ -73,11 +102,13 @@ struct bluefs_fnode_delta_t {
 
     denc(v.type, p);
     if (v.type == WAL_V2) {
+      ceph_assert(struct_v == 2);
       denc(v.wal_limit, p);
       denc(v.wal_size, p);
     }
 
     DENC_FINISH(p);
+
   }
 };
 WRITE_CLASS_DENC(bluefs_fnode_delta_t)
@@ -134,10 +165,24 @@ struct bluefs_fnode_t {
     DENC_DUMP_PRE(bluefs_fnode_t);
     _denc_friend(*this, p);
   }
+
   void decode(ceph::buffer::ptr::const_iterator& p) {
-    _denc_friend(*this, p);
+    DENC_START(2, 2, p);
+    denc_varint(ino, p);
+    denc_varint(size, p);
+    denc(mtime, p);
+    denc(type, p);
+    denc(extents, p);
+    if (type == WAL_V2) {
+      ceph_assert(struct_v == 2);
+      ceph_assert(struct_compat == 2);
+      denc(wal_limit, p);
+      denc(wal_size, p);
+    }
+    DENC_FINISH(p);
     recalc_allocated();
   }
+
   template<typename T, typename P>
   friend std::enable_if_t<std::is_same_v<bluefs_fnode_t, std::remove_const_t<T>>>
   _denc_friend(T& v, P& p) {
@@ -154,6 +199,7 @@ struct bluefs_fnode_t {
     denc(v.type, p);
     denc(v.extents, p);
     if (v.type == WAL_V2) {
+      ceph_assert(struct_v == 2 && struct_compat == 2);
       denc(v.wal_limit, p);
       denc(v.wal_size, p);
     }

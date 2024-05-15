@@ -2312,7 +2312,7 @@ void BlueFS::_wal_update_size(FileRef file, uint64_t flush_offset, uint64_t incr
   while (flush_offset < file->fnode.wal_limit) {
     // read first part of wal flush
     bufferlist bl;
-    int read_result = _read(h, flush_offset, sizeof(File::WALFlush::WALLength), &bl, nullptr);
+    uint64_t read_result = (uint64_t)_read(h, flush_offset, sizeof(File::WALFlush::WALLength), &bl, nullptr);
     if (read_result < sizeof(File::WALFlush::WALLength)) {
       dout(20) << fmt::format("{} cannot read flush length, most likely we are out of bounds. flush_offset={:#X}", __func__, flush_offset) << dendl;
       break;
