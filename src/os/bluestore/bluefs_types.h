@@ -75,7 +75,7 @@ struct bluefs_fnode_delta_t {
     denc(extents, p);
 
     denc(type, p);
-    if (type == WAL_V2) {
+    if (struct_v >= 2 && type == WAL_V2) {
       ceph_assert(struct_v == 2 && struct_compat == 2);
       denc(wal_limit, p);
       denc(wal_size, p);
@@ -101,8 +101,7 @@ struct bluefs_fnode_delta_t {
     denc(v.extents, p);
 
     denc(v.type, p);
-    if (v.type == WAL_V2) {
-      ceph_assert(struct_v == 2);
+    if (struct_v >= 2 && v.type == WAL_V2) {
       denc(v.wal_limit, p);
       denc(v.wal_size, p);
     }
@@ -173,9 +172,7 @@ struct bluefs_fnode_t {
     denc(mtime, p);
     denc(type, p);
     denc(extents, p);
-    if (type == WAL_V2) {
-      ceph_assert(struct_v == 2);
-      ceph_assert(struct_compat == 2);
+    if (struct_v >= 2 && type == WAL_V2) {
       denc(wal_limit, p);
       denc(wal_size, p);
     }
@@ -198,7 +195,7 @@ struct bluefs_fnode_t {
     denc(v.mtime, p);
     denc(v.type, p);
     denc(v.extents, p);
-    if (v.type == WAL_V2) {
+    if (struct_v >= 2 && v.type == WAL_V2) {
       ceph_assert(struct_v == 2 && struct_compat == 2);
       denc(v.wal_limit, p);
       denc(v.wal_size, p);
