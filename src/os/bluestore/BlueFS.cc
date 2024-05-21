@@ -4423,7 +4423,7 @@ int BlueFS::open_for_write(
 
   log.t.op_file_update(file->fnode);
   if (create)
-    log.t.op_dir_link(dirname, filename, file->fnode.ino);
+    log.t.op_dir_link(dirname, filename, file->fnode.ino, file->is_new_wal());
 
   std::lock_guard dl(dirty.lock);
   for (auto& p : pending_release_extents) {
@@ -4580,7 +4580,7 @@ int BlueFS::rename(
 	     << ") file " << new_filename
 	     << " already exists, unlinking" << dendl;
     ceph_assert(q->second != file);
-    log.t.op_dir_unlink(new_dirname, new_filename);
+    log.t.op_dir_unlink(new_dirname, new_filename, file->is_new_wal());
     _drop_link_D(q->second);
   }
 
@@ -4590,8 +4590,8 @@ int BlueFS::rename(
   new_dir->file_map[string{new_filename}] = file;
   old_dir->file_map.erase(string{old_filename});
 
-  log.t.op_dir_link(new_dirname, new_filename, file->fnode.ino);
-  log.t.op_dir_unlink(old_dirname, old_filename);
+  log.t.op_dir_link(new_dirname, new_filename, file->fnode.ino, file->is_new_wal());
+  log.t.op_dir_unlink(old_dirname, old_filename, file->is_new_wal());
   return 0;
 }
 
@@ -4697,7 +4697,7 @@ int BlueFS::lock_file(std::string_view dirname, std::string_view filename,
     logger->set(l_bluefs_num_files, nodes.file_map.size());
     ++file->refs;
     log.t.op_file_update(file->fnode);
-    log.t.op_dir_link(dirname, filename, file->fnode.ino);
+    log.t.op_dir_link(dirname, filename, file->fnode.ino, file->is_new_wal());
   } else {
     file = q->second;
     if (file->locked) {
@@ -4779,7 +4779,7 @@ int BlueFS::unlink(std::string_view dirname, std::string_view filename)/*_LND*/
     return -EBUSY;
   }
   dir->file_map.erase(q);
-  log.t.op_dir_unlink(dirname, filename);
+  log.t.op_dir_unlink(dirname, filename, file->is_new_wal());
   _drop_link_D(file);
   logger->tinc(l_bluefs_unlink_lat, mono_clock::now() - t0);
 

@@ -270,7 +270,16 @@ void bluefs_transaction_t::bound_encode(size_t &s) const {
 void bluefs_transaction_t::encode(bufferlist& bl) const
 {
   uint32_t crc = op_bl.crc32c(-1);
-  ENCODE_START(1, 1, bl);
+  __u8 version = 1;
+  __u8 compat = 1;
+  if (wal_v2_count > 0) {
+    // This is a unfortunate trick to deal with missing version/compat checks on DENC_START while decoding bluefs_fnode_t and 
+    // bluefs_fnode_delta_t. Since ENCODE_START does include version assertions, we move logic of wal version to transactions 
+    // because transactions can be short lived and removed from new WAL versions enabling potetial osd downgrades.
+    version = 2;
+    compat = 2;
+  }
+  ENCODE_START(version, compat, bl);
   encode(uuid, bl);
   encode(seq, bl);
   // not using bufferlist encode method, as it merely copies the bufferptr and not
@@ -281,13 +290,16 @@ void bluefs_transaction_t::encode(bufferlist& bl) const
     bl.append(it.c_str(),  it.length());
   }
   encode(crc, bl);
+  if (struct_v >= 2) {
+    encode(wal_v2_count, bl);
+  }
   ENCODE_FINISH(bl);
 }
 
 void bluefs_transaction_t::decode(bufferlist::const_iterator& p)
 {
   uint32_t crc;
-  DECODE_START(1, p);
+  DECODE_START(2, p);
   decode(uuid, p);
   decode(seq, p);
   decode(op_bl, p);
@@ -297,6 +309,9 @@ void bluefs_transaction_t::decode(bufferlist::const_iterator& p)
   if (actual != crc)
     throw ceph::buffer::malformed_input("bad crc " + stringify(actual)
 				  + " expected " + stringify(crc));
+  if (struct_v >= 2) {
+    decode(wal_v2_count, p);
+  }
 }
 
 void bluefs_transaction_t::dump(Formatter *f) const
