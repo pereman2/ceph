@@ -11,6 +11,7 @@
 #include "Allocator.h"
 #include "include/ceph_assert.h"
 #include "common/admin_socket.h"
+#include "os/bluestore/bluefs_types.h"
 
 #define dout_context cct
 #define dout_subsys ceph_subsys_bluefs
@@ -1642,7 +1643,7 @@ int BlueFS::_replay(bool noop, bool to_stdout)
         {
 	  bluefs_fnode_t fnode;
 	  decode(fnode, p);
-          ceph_assert(fnode.type == 0 || fnode.type == 1);
+          ceph_assert(fnode.type == bluefs_node_type::LEGACY|| fnode.type == bluefs_node_type::WAL_V2);
 	  dout(20) << __func__ << " 0x" << std::hex << pos << std::dec
                    << ":  op_file_update " << " " << fnode << " " << dendl;
           if (unlikely(to_stdout)) {
