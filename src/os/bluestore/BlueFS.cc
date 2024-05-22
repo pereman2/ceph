@@ -2317,20 +2317,22 @@ void BlueFS::_wal_update_size(FileRef file, uint64_t flush_offset, uint64_t incr
       dout(20) << fmt::format("{} cannot read flush length, most likely we are out of bounds. flush_offset={:#X}", __func__, flush_offset) << dendl;
       break;
     }
-    uint64_t flush_length = 0;
-    flush_length = *((uint64_t*)bl.c_str());
+    File::WALFlush::WALLength flush_length_le(0);
+    flush_length_le = *((File::WALFlush::WALLength*)bl.c_str());
+    uint64_t flush_length = flush_length_le;
     dout(20) << __func__ << " flush_length " << flush_length << dendl;
 
     // read marker
     bl.clear();
     uint64_t marker_offset = flush_offset+sizeof(File::WALFlush::WALLength)+flush_length;
     read_result = _read(h, marker_offset, sizeof(File::WALFlush::WALMarker), &bl, nullptr);
-    uint64_t marker = 0;
+    File::WALFlush::WALMarker marker_le(0);
     if (read_result < sizeof(File::WALFlush::WALMarker)) {
       dout(20) << fmt::format("{} cannot read marker, most likely we are out of bounds. flush_offset={:#X}, marker_offset={:#X}", __func__, flush_offset, marker_offset) << dendl;
       break;
     }
-    marker = *((uint64_t*)bl.c_str());
+    marker_le = *((File::WALFlush::WALMarker*)bl.c_str());
+    uint64_t marker = marker_le;
     if (marker != file->fnode.ino) {
       // EOF or corruption
       break;
@@ -2760,7 +2762,7 @@ void BlueFS::_compact_log_dump_metadata_NF(uint64_t start_seq,
     for (auto& [fname, file_ref] : dir_ref->file_map) {
       dout(20) << __func__ << " op_dir_link " << path << "/" << fname
 	       << " to " << file_ref->fnode.ino << dendl;
-      t->op_dir_link(path, fname, file_ref->fnode.ino);
+      t->op_dir_link(path, fname, file_ref->fnode.ino, file_ref->is_new_wal());
     }
   }
 }
@@ -3739,15 +3741,17 @@ int BlueFS::_flush_range_F(FileWriter *h, uint64_t offset, uint64_t length)
   }
 
   if (h->file->is_new_wal()) {
-    // create WAL flush envelope 
+    // create WAL flush envelope
     uint64_t flush_size = length - File::WALFlush::extra_envelope_size_on_front_and_tail();
     File::WALFlush::WALLength* pointer_to_flush_length = (File::WALFlush::WALLength*) h->buffer.c_str();
-    (*pointer_to_flush_length) = flush_size;
+    static_assert(sizeof(ceph_le64) == sizeof(uint64_t));
+    ceph_le64 flush_size_le(flush_size);
+    (*pointer_to_flush_length) = flush_size_le;
 
-    h->append((File::WALFlush::WALMarker)h->file->fnode.ino);
+    h->append(File::WALFlush::WALMarker(h->file->fnode.ino));
     h->file->fnode.wal_size += flush_size;
     h->file->fnode.wal_limit = h->file->fnode.get_allocated();
-  } 
+  }
 
   dout(20) << __func__ << " file now, unflushed " << h->file->fnode << dendl;
   int res = _flush_data(h, offset, length, buffered);

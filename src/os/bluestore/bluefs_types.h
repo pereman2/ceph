@@ -52,7 +52,7 @@ struct bluefs_fnode_delta_t {
   // only relevant in case of wal node
   uint64_t wal_limit;
   uint64_t wal_size;
-  uint8_t type; // bluefs_node_type. don't encode this.
+  uint8_t type = 0;
 
 
   mempool::bluefs::vector<bluefs_extent_t> extents;
@@ -74,11 +74,13 @@ struct bluefs_fnode_delta_t {
     denc(offset, p);
     denc(extents, p);
 
-    denc(type, p);
-    if (struct_v >= 2 && type == WAL_V2) {
-      ceph_assert(struct_v == 2 && struct_compat == 2);
+    if (struct_v >= 2) {
+      denc(type, p);
       denc(wal_limit, p);
       denc(wal_size, p);
+    }
+    if (struct_v == 1) {
+    	type = LEGACY;
     }
     DENC_FINISH(p);
 
@@ -100,8 +102,8 @@ struct bluefs_fnode_delta_t {
     denc(v.offset, p);
     denc(v.extents, p);
 
-    denc(v.type, p);
-    if (struct_v >= 2 && v.type == WAL_V2) {
+    if (struct_v >= 2) {
+      denc(v.type, p);
       denc(v.wal_limit, p);
       denc(v.wal_size, p);
     }
@@ -118,7 +120,7 @@ struct bluefs_fnode_t {
   uint64_t ino;
   uint64_t size;
   utime_t mtime;
-  uint8_t type = 0; // was prefer_bdev
+  uint8_t __unused__ = 0; // was prefer_bdev
   mempool::bluefs::vector<bluefs_extent_t> extents;
 
   // precalculated logical offsets for extents vector entries
@@ -127,6 +129,7 @@ struct bluefs_fnode_t {
 
   uint64_t allocated;
   uint64_t allocated_commited;
+  uint8_t type = 0; // was prefer_bdev
   uint64_t wal_limit; // EOF of wal, this limit represents upper limit of fnode.size, not upper limit of wal_size
   uint64_t wal_size; // Size we expect is in WAL, there could be more on power off instances in range of wal_size~wal_limit
 
@@ -170,11 +173,15 @@ struct bluefs_fnode_t {
     denc_varint(ino, p);
     denc_varint(size, p);
     denc(mtime, p);
-    denc(type, p);
+    denc(__unused__, p);
     denc(extents, p);
-    if (struct_v >= 2 && type == WAL_V2) {
+    if (struct_v >= 2) {
+      denc(type, p);
       denc(wal_limit, p);
       denc(wal_size, p);
+    }
+    if (struct_v == 1) {
+    	type = LEGACY;
     }
     DENC_FINISH(p);
     recalc_allocated();
@@ -193,10 +200,10 @@ struct bluefs_fnode_t {
     denc_varint(v.ino, p);
     denc_varint(v.size, p);
     denc(v.mtime, p);
-    denc(v.type, p);
+    denc(v.__unused__, p);
     denc(v.extents, p);
-    if (struct_v >= 2 && v.type == WAL_V2) {
-      ceph_assert(struct_v == 2 && struct_compat == 2);
+    if (struct_v >= 2) {
+      denc(v.type, p);
       denc(v.wal_limit, p);
       denc(v.wal_size, p);
     }

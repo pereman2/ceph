@@ -13,6 +13,7 @@
 #include "common/RefCountedObj.h"
 #include "common/ceph_context.h"
 #include "global/global_context.h"
+#include "include/byteorder.h"
 #include "include/common_fwd.h"
 
 #include "boost/intrusive/list.hpp"
@@ -250,11 +251,11 @@ public:
      *
      */
     struct WALFlush {
-      typedef uint64_t WALMarker; 
-      typedef uint64_t WALLength; 
+      typedef ceph_le64 WALMarker; 
+      typedef ceph_le64 WALLength; 
 
-      uint64_t offset = 0; // offset of start of flush, it should be length offset
-      WALLength length = 0;
+      uint64_t offset = ceph_le64(0); // offset of start of flush, it should be length offset
+      uint64_t length = ceph_le64(0);
 
       WALFlush(uint64_t offset, uint64_t length) : offset(offset), length(length) {}
 
@@ -424,7 +425,7 @@ public:
       buffer_appender.append_zero(len);
     }
 
-    void append(uint64_t value) {
+    void append(ceph_le64 value) {
       uint64_t l0 = get_buffer_length();
       ceph_assert(l0 + sizeof(value) <= std::numeric_limits<unsigned>::max());
       buffer_appender.append((const char*)&value, sizeof(value));
@@ -432,18 +433,6 @@ public:
 
     void append_hole(uint64_t len) {
       buffer.append_hole(len);
-    }
-
-    void prepend(uint64_t value) {
-      bufferlist tail;
-      tail.append((const char*)&value, sizeof(value));
-      tail.claim_append(buffer);
-      std::swap(tail, buffer);
-    }
-
-    void remove_trailing(uint64_t amount) {
-      bufferlist bl;
-      bl.substr_of(buffer, 0, buffer.length() - amount);
     }
 
     uint64_t get_effective_write_pos() {

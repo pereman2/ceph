@@ -217,16 +217,12 @@ void bluefs_fnode_t::generate_test_instances(list<bluefs_fnode_t*>& ls)
   ls.back()->size = 1048576;
   ls.back()->mtime = utime_t(123,45);
   ls.back()->extents.push_back(bluefs_extent_t(0, 1048576, 4096));
+  ls.back()->__unused__ = 1;
   ls.back()->type = 0;
 }
 
 ostream& operator<<(ostream& out, const bluefs_fnode_t& file)
 {
-  static constexpr std::string_view node_type_extra_data[] =  {
-    "",
-    " type WAL_V2",
-  };
-
   out << "file(ino " << file.ino
 	     << " size 0x" << std::hex << file.size << std::dec
 	     << " mtime " << file.mtime
@@ -236,7 +232,7 @@ ostream& operator<<(ostream& out, const bluefs_fnode_t& file)
   if (file.type == WAL_V2) {
     out << " wal_limit " << file.wal_limit << std::hex;
     out << " wal_size " << file.wal_size << std::hex;
-    out << node_type_extra_data[file.type] << std::dec;
+    out << " type WAL_V2 " << std::dec;
   }
   out << ")";
   return out;
