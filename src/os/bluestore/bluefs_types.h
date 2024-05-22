@@ -59,24 +59,23 @@ struct bluefs_fnode_delta_t {
 
   DENC_HELPERS
 
-  void bound_encode(size_t& p) const {
-    _denc_friend(*this, p);
-  }
-  void encode(ceph::buffer::list::contiguous_appender& p) const {
-    DENC_DUMP_PRE(bluefs_fnode_t);
-    _denc_friend(*this, p);
-  }
-  void decode(ceph::buffer::ptr::const_iterator& p) {
-    DENC_START(2, 2, p);
+  template <typename P>
+  void encode_helper(P& p) const {
+    __u8 need_v = type == WAL_V2 ? 2 : 1;
+    DENC_START(need_v, need_v, p);
     denc_varint(ino, p);
     denc_varint(size, p);
     denc(mtime, p);
     denc(offset, p);
+    if (struct_v >= 2) {
+      denc(type, p);
+    } else {
+      // v1 had a hint field that is no longer used
+      uint8_t __unused__ = 0;
+      denc(__unused__, p);
+    }
     denc(extents, p);
-
-    denc(type, p);
-    if (struct_v >= 2 && type == WAL_V2) {
-      ceph_assert(struct_v == 2 && struct_compat == 2);
+    if (struct_v >= 2) {
       denc(wal_limit, p);
       denc(wal_size, p);
     }
@@ -84,26 +83,31 @@ struct bluefs_fnode_delta_t {
 
   }
 
-  template<typename T, typename P>
-  friend std::enable_if_t<std::is_same_v<bluefs_fnode_delta_t, std::remove_const_t<T>>>
-  _denc_friend(T& v, P& p) {
-    uint8_t version = 1, compat = 1;
-    if (v.type == WAL_V2) {
-      version = 2;
-      compat = 2;
+  void bound_encode(size_t& p) const {
+    encode_helper(p);
+  }
+  void encode(ceph::buffer::list::contiguous_appender& p) const {
+    encode_helper(p);
+  }
+  void decode(ceph::buffer::ptr::const_iterator& p) {
+    DENC_START(0, 2, p);
+    // for decode v=0 is ignored, but compat=2 is check against
+    denc_varint(ino, p);
+    denc_varint(size, p);
+    denc(mtime, p);
+    denc(offset, p);
+    if (struct_v >= 2) {
+      denc(type, p);
+    } else {
+      // v1 had a hint field that is no longer used
+      uint8_t __unused__;
+      denc(__unused__, p);
+      type = LEGACY;
     }
-    DENC_START(version, compat, p);
-
-    denc_varint(v.ino, p);
-    denc_varint(v.size, p);
-    denc(v.mtime, p);
-    denc(v.offset, p);
-    denc(v.extents, p);
-
-    denc(v.type, p);
-    if (struct_v >= 2 && v.type == WAL_V2) {
-      denc(v.wal_limit, p);
-      denc(v.wal_size, p);
+    denc(extents, p);
+    if (struct_v >= 2) {
+      denc(wal_limit, p);
+      denc(wal_size, p);
     }
 
     DENC_FINISH(p);
@@ -157,22 +161,50 @@ struct bluefs_fnode_t {
   }
 
   DENC_HELPERS
-  void bound_encode(size_t& p) const {
-    _denc_friend(*this, p);
-  }
-  void encode(ceph::buffer::list::contiguous_appender& p) const {
-    DENC_DUMP_PRE(bluefs_fnode_t);
-    _denc_friend(*this, p);
-  }
 
-  void decode(ceph::buffer::ptr::const_iterator& p) {
-    DENC_START(2, 2, p);
+  template <typename P>
+  void encode_helper(P& p) const {
+    __u8 need_v = type == WAL_V2 ? 2 : 1;
+    DENC_START(need_v, need_v, p);
     denc_varint(ino, p);
     denc_varint(size, p);
     denc(mtime, p);
-    denc(type, p);
+    if (struct_v >= 2) {
+      denc(type, p);
+    } else {
+      // v1 had a hint field that is no longer used
+      uint8_t __unused__ = 0;
+      denc(__unused__, p);
+    }
     denc(extents, p);
-    if (struct_v >= 2 && type == WAL_V2) {
+    if (struct_v >= 2) {
+      denc(wal_limit, p);
+      denc(wal_size, p);
+    }
+    DENC_FINISH(p);
+  }
+  void bound_encode(size_t& p) const {
+    encode_helper(p);
+  }
+  void encode(ceph::buffer::list::contiguous_appender& p) const {
+    encode_helper(p);
+  }
+  void decode(ceph::buffer::ptr::const_iterator& p) {
+    DENC_START(0, 2, p);
+    // for decode v=0 is ignored, but compat=2 is check against
+    denc_varint(ino, p);
+    denc_varint(size, p);
+    denc(mtime, p);
+    if (struct_v >= 2) {
+      denc(type, p);
+    } else {
+      // v1 had a hint field that is no longer used
+      uint8_t __unused__;
+      denc(__unused__, p);
+      type = LEGACY;
+    }
+    denc(extents, p);
+    if (struct_v >= 2) {
       denc(wal_limit, p);
       denc(wal_size, p);
     }
@@ -180,28 +212,6 @@ struct bluefs_fnode_t {
     recalc_allocated();
   }
 
-  template<typename T, typename P>
-  friend std::enable_if_t<std::is_same_v<bluefs_fnode_t, std::remove_const_t<T>>>
-  _denc_friend(T& v, P& p) {
-
-    uint8_t version = 1, compat = 1;
-    if (v.type == WAL_V2) {
-      version = 2;
-      compat = 2;
-    }
-    DENC_START(version, compat, p);
-    denc_varint(v.ino, p);
-    denc_varint(v.size, p);
-    denc(v.mtime, p);
-    denc(v.type, p);
-    denc(v.extents, p);
-    if (struct_v >= 2 && v.type == WAL_V2) {
-      ceph_assert(struct_v == 2 && struct_compat == 2);
-      denc(v.wal_limit, p);
-      denc(v.wal_size, p);
-    }
-    DENC_FINISH(p);
-  }
   void reset_delta() {
     allocated_commited = allocated;
   }
