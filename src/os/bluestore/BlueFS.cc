@@ -1311,8 +1311,7 @@ int BlueFS::_replay(bool noop, bool to_stdout)
 
   boost::dynamic_bitset<uint64_t> used_blocks[MAX_BDEV];
 
-  set<uint64_t> wal_files_to_update; // list of ino to call _wal_update_size at last
-                                     // this way if it was unlinked we can skip it
+  set<FileRef> wal_files_to_update; // list of Files to get list of flushes with _wal_update_size 
 
   if (!noop) {
     if (cct->_conf->bluefs_log_replay_check_allocations) {
@@ -1591,11 +1590,8 @@ int BlueFS::_replay(bool noop, bool to_stdout)
 	    map<string,FileRef>::iterator r = q->second->file_map.find(filename);
 	    ceph_assert(r != q->second->file_map.end());
 
-            FileRef file = r->second;
-            ceph_assert(file->refs > 0); 
-            if (file->is_new_wal()) {
-              wal_files_to_update.erase(file->fnode.ino);
-            }
+      FileRef file = r->second;
+      ceph_assert(file->refs > 0); 
 	    --file->refs;
 	    q->second->file_map.erase(r);
 	  }
@@ -1668,7 +1664,7 @@ int BlueFS::_replay(bool noop, bool to_stdout)
             f->fnode = fnode;
 
             if (f->is_new_wal()) {
-              wal_files_to_update.insert(fnode.ino);
+              wal_files_to_update.insert(f);
             }
 
 	    if (fnode.ino > ino_last) {
@@ -1801,11 +1797,11 @@ int BlueFS::_replay(bool noop, bool to_stdout)
     dirty.seq_stable = log_seq;
 
 
-    for (uint64_t ino : wal_files_to_update) {
-      if (!nodes.file_map.contains(ino)) {
+    for (FileRef file : wal_files_to_update) {
+      dout(5) << __func__ << " " << file << " " << file->refs << dendl;
+      if (file->refs == 0) {
         continue;
       }
-      FileRef file = _get_file(ino);
       file->is_wal_read_loaded = true;
       file->wal_flushes.clear();
       _wal_update_size(file, 0, file->fnode.size);
@@ -2208,7 +2204,8 @@ int BlueFS::migrate_wal_to_v1() {
       read_buffer.clear();
       uint64_t to_read = std::min(buffer_size, left_to_read);
       int r = _read_wal(previous_reader, read_offset, to_read, &read_buffer, nullptr);
-      if (r < to_read) {
+      ceph_assert(r >= 0);
+      if (uint64_t(r) < to_read) {
         dout(5) << fmt::format("{} read less than expect while migrating file {} to wal v1", __func__, name) << dendl;
         failure_while_migrating = true;
         break;
@@ -2233,11 +2230,11 @@ int BlueFS::migrate_wal_to_v1() {
   }
   
   if (failure_while_migrating) {
-    dout(5) << fmt::format("{} couldn't properly move data from v2 to v1, unlinking temp files...", __func__) << dendl;
+    derr << fmt::format("{} couldn't properly move data from v2 to v1, unlinking temp files...", __func__) << dendl;
     size_t file_migrated_count = 0;
-    for (auto &[name, file] : files_to_migrate) {
+    for (size_t i = 0; i < files_to_migrate.size(); i++) {
       string new_file_temp_name = fmt::format("{}{}", tmp_name_prefix, file_migrated_count);
-      dout(5) << fmt::format("{} unlinking {}", __func__, new_file_temp_name) << dendl;
+      derr << fmt::format("{} unlinking {}", __func__, new_file_temp_name) << dendl;
       int unlink_ret = unlink(wal_dir, new_file_temp_name);
       ceph_assert(unlink_ret == 0);
       file_migrated_count++;
@@ -2245,7 +2242,6 @@ int BlueFS::migrate_wal_to_v1() {
     return -ENOSPC;
   }
   
-  dout(5) << fmt::format("{} success moving data", __func__) << dendl;
   // everything went okay, rename files
   file_migrated_count = 0;
   for (auto &[name, file] : files_to_migrate) {
@@ -2260,6 +2256,8 @@ int BlueFS::migrate_wal_to_v1() {
     ceph_assert(rename_ret == 0);
     file_migrated_count++;
   }
+  
+  dout(5) << fmt::format("{} success moving data", __func__) << dendl;
   
   return 0;
   
@@ -2431,12 +2429,14 @@ int64_t BlueFS::_read_random(
 }
 
 void BlueFS::_wal_update_size(FileRef file, uint64_t flush_offset, uint64_t increment) {
+  using WALLength = File::WALFlush::WALLength;
+  using WALMarker = File::WALFlush::WALMarker;
+  
   dout(20) 
       << fmt::format(
         "{} updating WAL file {} for range {:#x}~{:#x} limit is {:#x}", 
         __func__, file->fnode.ino, flush_offset, increment, file->fnode.wal_limit) 
       << dendl;
-  ceph_assert(file->is_wal_read_loaded);
   ceph_assert((flush_offset == 0 && file->wal_flushes.empty()) || (flush_offset == file->wal_flushes.back().end_offset()));
 
   FileReader *h = new FileReader(file, cct->_conf->bluefs_max_prefetch, false, true);
@@ -2445,33 +2445,33 @@ void BlueFS::_wal_update_size(FileRef file, uint64_t flush_offset, uint64_t incr
   while (flush_offset < file->fnode.wal_limit) {
     // read first part of wal flush
     bufferlist bl;
-    uint64_t read_result = (uint64_t)_read(h, flush_offset, sizeof(File::WALFlush::WALLength), &bl, nullptr);
-    if (read_result < sizeof(File::WALFlush::WALLength)) {
+    uint64_t read_result = (uint64_t)_read(h, flush_offset, sizeof(WALLength), &bl, nullptr);
+    if (read_result < sizeof(WALLength)) {
       dout(20) << fmt::format("{} cannot read flush length, most likely we are out of bounds. flush_offset={:#X}", __func__, flush_offset) << dendl;
       break;
     }
-    File::WALFlush::WALLength flush_length_le(0);
-    flush_length_le = *((File::WALFlush::WALLength*)bl.c_str());
-    uint64_t flush_length = flush_length_le;
+    WALLength flush_length;
+    auto buffer_iterator = bl.cbegin();
+    decode(flush_length, buffer_iterator);
     dout(20) << __func__ << " flush_length " << flush_length << dendl;
 
     // read marker
     bl.clear();
-    uint64_t marker_offset = flush_offset+sizeof(File::WALFlush::WALLength)+flush_length;
-    read_result = _read(h, marker_offset, sizeof(File::WALFlush::WALMarker), &bl, nullptr);
-    File::WALFlush::WALMarker marker_le(0);
-    if (read_result < sizeof(File::WALFlush::WALMarker)) {
+    uint64_t marker_offset = flush_offset + sizeof(WALLength)+flush_length;
+    read_result = _read(h, marker_offset, sizeof(WALMarker), &bl, nullptr);
+    if (read_result < sizeof(WALMarker)) {
       dout(20) << fmt::format("{} cannot read marker, most likely we are out of bounds. flush_offset={:#X}, marker_offset={:#X}", __func__, flush_offset, marker_offset) << dendl;
       break;
     }
-    marker_le = *((File::WALFlush::WALMarker*)bl.c_str());
-    uint64_t marker = marker_le;
+    uint64_t marker;
+    buffer_iterator = bl.cbegin();
+    decode(marker, buffer_iterator);
     if (marker != file->fnode.ino) {
       // EOF or corruption
       break;
     }
 
-    uint64_t increase = flush_length+(sizeof(File::WALFlush::WALLength)+sizeof(File::WALFlush::WALMarker));
+    uint64_t increase = flush_length+(sizeof(WALLength)+sizeof(WALMarker));
     dout(20) << fmt::format("{} adding flush {:#x}~{:#x}", __func__, flush_offset, flush_length) << dendl;
     file->wal_flushes.push_back({flush_offset, flush_length});
     if (flush_offset >= flush_end) {
@@ -2499,6 +2499,7 @@ int64_t BlueFS::_read_wal(
   bufferlist *outbl,     ///< [out] optional: reference the result here
   char *out)             ///< [out] optional: or copy it here
 {
+  ceph_assert(h->file->is_wal_read_loaded);
   dout(20) << __func__ << " h " << h << " offset: 0x" 
     << off << std::hex << "~" << len << std::hex << dendl;
   if (outbl) {
@@ -2520,8 +2521,7 @@ int64_t BlueFS::_read_wal(
   while (remaining_len > 0 && flush_iterator != h->file->wal_flushes.end()) {
     uint64_t flush_offset = flush_iterator->offset;
     uint64_t flush_length = flush_iterator->length;
-    dout(20) << __func__ << " flush_offset " << flush_offset << dendl;
-    dout(20) << __func__ << " flush_length " << flush_length << dendl;
+    dout(25) << fmt::format("{} flush_offset={:#x} flush_length={:#x}", __func__, flush_offset, flush_length) << dendl;
 
     if (flush_length == 0) {
       if (remaining_len > 0) {
@@ -2547,41 +2547,30 @@ int64_t BlueFS::_read_wal(
 
     }
 
-    flush_offset += sizeof(File::WALFlush::WALLength);
+    uint64_t payload_offset = flush_iterator->get_payload_offset();
 
     uint64_t skip_front = 0;
     if(wal_data_logical_offset < off) { 
       // offset is in this flush chunk so if we are before we move forward
       skip_front = off - wal_data_logical_offset;
     }
-    flush_offset += skip_front;
+    payload_offset += skip_front;
     wal_data_logical_offset += skip_front;
 
-    dout(20) << __func__ << " after getting flush flush_offset " << flush_offset 
-      << " skipping: " << skip_front << dendl;
+    dout(20) << fmt::format("{} payload_offset is {:#X} after skipping {:#X} bytes", __func__, payload_offset, skip_front) << dendl;
 
     uint64_t data_to_read_from_flush = std::min(flush_length-skip_front, remaining_len);
     bufferlist payload;
-    dout(20) << __func__ << "  data_to_read_from_flush" << data_to_read_from_flush << dendl;
-    _read(h, flush_offset, data_to_read_from_flush, &payload, nullptr);
+    dout(25) << fmt::format("{} data to read from flush = {:#X}", __func__, data_to_read_from_flush) << dendl;
+    _read(h, payload_offset, data_to_read_from_flush, &payload, nullptr);
 
-    if (outbl) {
-      outbl->append(payload);
-    }
     if (out) {
       auto p = payload.begin();
       p.copy(data_to_read_from_flush, out);
       out += data_to_read_from_flush;
     }
-
-    // Check marker
-    {
-      uint64_t marker_offset = flush_iterator->get_marker_offset();
-      bufferlist marker_bl;
-      _read(h, marker_offset, sizeof(File::WALFlush::WALMarker), &marker_bl, nullptr);
-      uint64_t marker = *((uint64_t*)marker_bl.c_str());
-      dout(20) << "marker " << marker << " " << h->file->fnode.ino << dendl;
-      ceph_assert(marker == h->file->fnode.ino);
+    if (outbl) {
+      outbl->claim_append(payload);
     }
     flush_iterator++;
 
@@ -3747,20 +3736,19 @@ ceph::bufferlist BlueFS::FileWriter::flush_buffer(
     // Otherwise a costly rebuild could happen in e.g. `KernelDevice`.
     buffer_appender.append_zero(padding_len);
     buffer.splice(buffer.length() - padding_len, padding_len, &bl);
+    
+    // Deep copy the tail here. This allows to avoid costlier copy on
+    // bufferlist rebuild in e.g. `KernelDevice` and minimizes number
+    // of memory allocations.
+    // The alternative approach would be to place the entire tail and
+    // padding on a dedicated, 4 KB long memory chunk. This shouldn't
+    // trigger the rebuild while still being less expensive.
+    buffer_appender.substr_of(bl, bl.length() - padding_len - tail, tail);
+    buffer.splice(buffer.length() - tail, tail, &tail_block);
   } else {
     tail_block.clear();
   }
 
-  // Deep copy the tail here. This allows to avoid costlier copy on
-  // bufferlist rebuild in e.g. `KernelDevice` and minimizes number
-  // of memory allocations.
-  // The alternative approach would be to place the entire tail and
-  // padding on a dedicated, 4 KB long memory chunk. This shouldn't
-  // trigger the rebuild while still being less expensive.
-  // If we are writing to WAL we want to keep everything except the extra zeros added to the end
-  // hence extra_if_wal accounts for the amount of zeroes at the end
-  buffer_appender.substr_of(bl, bl.length() - padding_len - tail, tail);
-  buffer.splice(buffer.length() - tail, tail, &tail_block);
   return bl;
 }
 
@@ -4800,7 +4788,6 @@ int BlueFS::stat(std::string_view dirname, std::string_view filename,
   if (size)
     *size = file->fnode.size;
   if (file->is_new_wal()) {
-    ceph_assert(file->is_wal_read_loaded);
     *size = file->fnode.wal_size;
   }
   if (mtime)

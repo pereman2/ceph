@@ -251,11 +251,11 @@ public:
      *
      */
     struct WALFlush {
-      typedef ceph_le64 WALMarker; 
-      typedef ceph_le64 WALLength; 
+      typedef uint64_t WALMarker; 
+      typedef uint64_t WALLength; 
 
-      uint64_t offset = ceph_le64(0); // offset of start of flush, it should be length offset
-      uint64_t length = ceph_le64(0);
+      uint64_t offset = 0; // offset of start of flush, it should be length offset
+      uint64_t length = 0;
 
       WALFlush(uint64_t offset, uint64_t length) : offset(offset), length(length) {}
 
@@ -425,10 +425,12 @@ public:
       buffer_appender.append_zero(len);
     }
 
-    void append(ceph_le64 value) {
+    void append(uint64_t value) {
       uint64_t l0 = get_buffer_length();
       ceph_assert(l0 + sizeof(value) <= std::numeric_limits<unsigned>::max());
-      buffer_appender.append((const char*)&value, sizeof(value));
+      bufferlist encoded;
+      encode(value, encoded);
+      buffer_appender.append(encoded);
     }
 
     void append_hole(uint64_t len) {
