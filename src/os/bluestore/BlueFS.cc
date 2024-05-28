@@ -2532,6 +2532,7 @@ int64_t BlueFS::_read_wal(
     }
     // if we won't find offset here, go ahead
     bool in_range = wal_data_logical_offset < off+len && wal_data_logical_offset+flush_length > off;
+    ceph_assert(wal_data_logical_offset < off+len);
     if (!in_range) {
       if (off >= wal_data_logical_offset + flush_length) {
         // move to next flush
@@ -2540,11 +2541,6 @@ int64_t BlueFS::_read_wal(
         flush_iterator++;
         continue;
       }
-      // we can't read more, should this happen?
-      dout(5) << __func__ << " unexpected not in range: reading less then required "
-        << ret << "<" << len - ret << dendl;
-      break;
-
     }
 
     uint64_t payload_offset = flush_iterator->get_payload_offset();
@@ -3858,7 +3854,10 @@ int BlueFS::_flush_range_F(FileWriter *h, uint64_t offset, uint64_t length)
   if (h->file->fnode.size < end) {
     vselector->add_usage(h->file->vselector_hint, end - h->file->fnode.size);
     h->file->fnode.size = end;
-    h->file->is_dirty = true;
+    // Don't mark regular appends as dirty on WAL_V2. Note that allocations are marked as dirty.
+    if (!h->file->is_new_wal()) {
+      h->file->is_dirty = true;
+    }
   }
 
   if (h->file->is_new_wal()) {
@@ -4183,7 +4182,7 @@ int BlueFS::fsync(FileWriter *h)/*_WF_WD_WLD_WLNF_WNF*/
       }
     }
   }
-  if (old_dirty_seq && !h->file->is_new_wal()) { // don't force flush on WAL
+  if (old_dirty_seq) {
     _flush_and_sync_log_LD(old_dirty_seq);
   }
   _maybe_compact_log_LNF_NF_LD_D();
