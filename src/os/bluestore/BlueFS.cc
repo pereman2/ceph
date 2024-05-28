@@ -2466,12 +2466,12 @@ void BlueFS::_wal_update_size(FileRef file, uint64_t flush_offset, uint64_t incr
     uint64_t marker;
     buffer_iterator = bl.cbegin();
     decode(marker, buffer_iterator);
-    if (marker != file->fnode.ino) {
+    if (marker != File::WALFlush::generate_hashed_marker(super.osd_uuid, file->fnode.ino)) {
       // EOF or corruption
       break;
     }
 
-    uint64_t increase = flush_length+(sizeof(WALLength)+sizeof(WALMarker));
+    uint64_t increase = flush_length+(sizeof(WALLength) + sizeof(WALMarker));
     dout(20) << fmt::format("{} adding flush {:#x}~{:#x}", __func__, flush_offset, flush_length) << dendl;
     file->wal_flushes.push_back({flush_offset, flush_length});
     if (flush_offset >= flush_end) {
@@ -3869,7 +3869,7 @@ int BlueFS::_flush_range_F(FileWriter *h, uint64_t offset, uint64_t length)
     ceph_le64 flush_size_le(flush_size);
     (*pointer_to_flush_length) = flush_size_le;
 
-    h->append(File::WALFlush::WALMarker(h->file->fnode.ino));
+    h->append(File::WALFlush::generate_hashed_marker(super.osd_uuid, h->file->fnode.ino));
     h->file->fnode.wal_size += flush_size;
     h->file->fnode.wal_limit = h->file->fnode.get_allocated();
   }

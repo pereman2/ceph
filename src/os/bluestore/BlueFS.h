@@ -6,6 +6,7 @@
 #include <atomic>
 #include <mutex>
 #include <limits>
+#include <uuid/uuid.h>
 
 #include "bluefs_types.h"
 #include "blk/BlockDevice.h"
@@ -14,10 +15,12 @@
 #include "common/ceph_context.h"
 #include "global/global_context.h"
 #include "include/byteorder.h"
+#include "include/ceph_hash.h"
 #include "include/common_fwd.h"
 
 #include "boost/intrusive/list.hpp"
 #include "boost/dynamic_bitset.hpp"
+#include "include/hash.h"
 
 class Allocator;
 
@@ -280,7 +283,16 @@ public:
       static constexpr uint64_t extra_envelope_size_on_tail() {
         return sizeof(WALMarker); // appended file marker == ino
       }
-
+      
+      static uint64_t generate_hashed_marker(uuid_d uuid, uint64_t ino) {
+        char uuid_copy[16];
+        memcpy(uuid_copy, uuid.bytes(), 16);
+        uint64_t* blocks_of_64 = (uint64_t*)&uuid_copy[0];
+        for (size_t i = 0; i < (sizeof(uuid_copy) / sizeof(uint64_t)); i++) {
+          blocks_of_64[i] ^= ino;
+        }
+        return ceph_str_hash(CEPH_STR_HASH_RJENKINS, &uuid_copy[0], sizeof(uuid_copy));
+      }
     };
 
 
