@@ -6,6 +6,7 @@
 #include "BlueFS.h"
 #include "common/Formatter.h"
 #include "include/denc.h"
+#include "include/encoding.h"
 #include "include/uuid.h"
 #include "include/stringify.h"
 
@@ -341,4 +342,43 @@ ostream& operator<<(ostream& out, const bluefs_transaction_t& t)
 	     << " len 0x" << std::hex << t.op_bl.length()
 	     << " crc 0x" << t.op_bl.crc32c(-1)
 	     << std::dec << ")";
+}
+
+void bluefs_wal_header_t::bound_encode(size_t &s) const {
+  s += 1; // version
+  s += 1; // compat
+  s += 4; // size
+  denc(flush_length, s);
+}
+
+void bluefs_wal_header_t::encode(bufferlist& bl) const {
+  ENCODE_START(1, 1, bl);
+  encode(flush_length, bl);
+  ENCODE_FINISH(bl);
+}
+
+void bluefs_wal_header_t::encode(bufferlist::contiguous_filler& filler_in) const {
+  // We don't encode struct_len with this header as we expect to read out of bounds and bad struct_len will cause exceptions
+  __u8 struct_v = 1;
+  __u8 struct_compat = 1;
+  
+  filler_in.copy_in(sizeof(struct_v), (char *)&struct_v);
+  filler_in.copy_in(sizeof(struct_compat), (char *)&struct_compat);
+  
+  ceph_le64 flush_length_le(flush_length);
+  filler_in.copy_in(sizeof(ceph_le64), (const char*)&flush_length_le);
+}
+
+void bluefs_wal_header_t::decode(bufferlist::const_iterator& p)
+{
+  // We can't use regular api because struct_len will always fail when we reach EOF.
+  __u8 struct_v = 1;
+  __u8 struct_compat = 1;
+  
+  using ::ceph::decode;
+  decode(struct_v, p);
+  decode(struct_compat, p);
+  // We shouldn't throw as we expect bogus bytes after EOF
+    
+  decode(flush_length, p);
 }

@@ -2440,24 +2440,34 @@ void BlueFS::_wal_update_size(FileRef file, uint64_t flush_offset, uint64_t incr
   ceph_assert((flush_offset == 0 && file->wal_flushes.empty()) || (flush_offset == file->wal_flushes.back().end_offset()));
 
   FileReader *h = new FileReader(file, cct->_conf->bluefs_max_prefetch, false, true);
+  
+  size_t header_size = File::WALFlush::header_size();
 
   uint64_t flush_end = flush_offset + increment;
   while (flush_offset < file->fnode.wal_limit) {
     // read first part of wal flush
     bufferlist bl;
-    uint64_t read_result = (uint64_t)_read(h, flush_offset, sizeof(WALLength), &bl, nullptr);
-    if (read_result < sizeof(WALLength)) {
-      dout(20) << fmt::format("{} cannot read flush length, most likely we are out of bounds. flush_offset={:#X}", __func__, flush_offset) << dendl;
+    bluefs_wal_header_t header;
+    
+    uint64_t read_result = (uint64_t)_read(h, flush_offset, header_size, &bl, nullptr);
+    if (read_result < header_size) {
+      dout(20) << fmt::format("{} cannot read wal header, most likely we are out of bounds. flush_offset={:#X}", __func__, flush_offset) << dendl;
       break;
     }
-    WALLength flush_length;
+    
+    dout(30) << __func__ << " result \n";
+    bl.hexdump(*_dout);
+    *_dout << dendl;
     auto buffer_iterator = bl.cbegin();
-    decode(flush_length, buffer_iterator);
+    decode(header, buffer_iterator);
+    
+    WALLength flush_length = header.flush_length;
     dout(20) << __func__ << " flush_length " << flush_length << dendl;
+    File::WALFlush new_flush(flush_offset, flush_length);
 
     // read marker
     bl.clear();
-    uint64_t marker_offset = flush_offset + sizeof(WALLength)+flush_length;
+    uint64_t marker_offset = new_flush.get_marker_offset();
     read_result = _read(h, marker_offset, sizeof(WALMarker), &bl, nullptr);
     if (read_result < sizeof(WALMarker)) {
       dout(20) << fmt::format("{} cannot read marker, most likely we are out of bounds. flush_offset={:#X}, marker_offset={:#X}", __func__, flush_offset, marker_offset) << dendl;
@@ -2471,12 +2481,12 @@ void BlueFS::_wal_update_size(FileRef file, uint64_t flush_offset, uint64_t incr
       break;
     }
 
-    uint64_t increase = flush_length+(sizeof(WALLength) + sizeof(WALMarker));
-    dout(20) << fmt::format("{} adding flush {:#x}~{:#x}", __func__, flush_offset, flush_length) << dendl;
-    file->wal_flushes.push_back({flush_offset, flush_length});
+    uint64_t increase = new_flush.end_offset() - new_flush.offset;
+    dout(20) << fmt::format("{} adding flush {:#x}~{:#x}", __func__, flush_offset, new_flush.length) << dendl;
+    file->wal_flushes.push_back(new_flush);
     if (flush_offset >= flush_end) {
-      dout(20) << fmt::format("{} recovering flush {:#x}~{:#x}", __func__, flush_offset, flush_length) << dendl;
-      file->fnode.wal_size += flush_length;
+      dout(20) << fmt::format("{} recovering flush {:#x}~{:#x}", __func__, flush_offset, new_flush.length) << dendl;
+      file->fnode.wal_size += new_flush.length;
       file->fnode.size += increase;
     }
 
@@ -2531,7 +2541,7 @@ int64_t BlueFS::_read_wal(
       break;
     }
     // if we won't find offset here, go ahead
-    bool in_range = wal_data_logical_offset < off+len && wal_data_logical_offset+flush_length > off;
+    bool in_range = wal_data_logical_offset < off + len && wal_data_logical_offset + flush_length > off;
     ceph_assert(wal_data_logical_offset < off+len);
     if (!in_range) {
       if (off >= wal_data_logical_offset + flush_length) {
@@ -3799,7 +3809,7 @@ int BlueFS::_flush_range_F(FileWriter *h, uint64_t offset, uint64_t length)
   if (h->file->is_new_wal()) {
     // WALFlush::WALLength is already appended at the start of first append_try_flush
     // update length, offset is already updated with correct position
-    length += File::WALFlush::extra_envelope_size_on_tail();
+    length += File::WALFlush::tail_size();
   }
   uint64_t end = offset + length;
 
@@ -3863,10 +3873,9 @@ int BlueFS::_flush_range_F(FileWriter *h, uint64_t offset, uint64_t length)
   if (h->file->is_new_wal()) {
     // create WAL flush envelope
     uint64_t flush_size = length - File::WALFlush::extra_envelope_size_on_front_and_tail();
-    File::WALFlush::WALLength* pointer_to_flush_length = (File::WALFlush::WALLength*) h->buffer.c_str();
-    static_assert(sizeof(ceph_le64) == sizeof(uint64_t));
-    ceph_le64 flush_size_le(flush_size);
-    (*pointer_to_flush_length) = flush_size_le;
+    ceph_assert(h->get_wal_header_filler() != nullptr);
+    bluefs_wal_header_t(flush_size).encode(*h->get_wal_header_filler());
+    h->set_wal_header_filler(nullptr);
 
     h->append(File::WALFlush::generate_hashed_marker(super.osd_uuid, h->file->fnode.ino));
     h->file->fnode.wal_size += flush_size;
@@ -4005,7 +4014,10 @@ void BlueFS::append_try_flush(FileWriter *h, const char* buf, size_t len)/*_WF_L
     std::unique_lock hl(h->lock);
 
     if (h->file->is_new_wal() && h->get_buffer_length() == 0) {
-      h->append_hole(sizeof(File::WALFlush::WALLength));
+      size_t size = 0;
+      bluefs_wal_header_t().bound_encode(size);
+      bufferlist::contiguous_filler filler = h->append_hole(size);
+      h->set_wal_header_filler(new bufferlist::contiguous_filler(filler));
     }
 
     size_t max_size = 1ull << 30; // cap to 1GB

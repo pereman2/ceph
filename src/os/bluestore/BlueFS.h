@@ -263,8 +263,13 @@ public:
       WALFlush(uint64_t offset, uint64_t length) : offset(offset), length(length) {}
 
 
-      uint64_t get_marker_offset() {
-        return offset + sizeof(WALLength) + length;
+      static constexpr size_t header_size() {
+        // version, compat, struct length and struct
+        return 1 + 1 + 4 + sizeof(bluefs_wal_header_t);
+      }
+      
+      static constexpr size_t tail_size() {
+        return sizeof(WALMarker);
       }
 
       uint64_t end_offset() {
@@ -272,16 +277,15 @@ public:
       }
 
       uint64_t get_payload_offset() {
-        return offset + sizeof(WALLength);
+        return offset + header_size();
+      }
+      
+      uint64_t get_marker_offset() {
+        return get_payload_offset() + length;
       }
 
       static constexpr uint64_t extra_envelope_size_on_front_and_tail() {
-        return sizeof(WALLength) // prepended flush length
-          + sizeof(WALMarker); // appended file marker == ino
-      }
-
-      static constexpr uint64_t extra_envelope_size_on_tail() {
-        return sizeof(WALMarker); // appended file marker == ino
+        return header_size() + tail_size(); 
       }
       
       static uint64_t generate_hashed_marker(uuid_d uuid, uint64_t ino) {
@@ -386,6 +390,7 @@ public:
       const unsigned length,
       const bluefs_super_t& super);
     ceph::buffer::list::page_aligned_appender buffer_appender;  //< for const char* only
+    bufferlist::contiguous_filler* wal_header_filler; // To encode bluefs_wal_header_t we need to save the location of the header we want to fill
   public:
     int writer_type = 0;    ///< WRITER_*
     int write_hint = WRITE_LIFE_NOT_SET;
@@ -397,7 +402,7 @@ public:
     FileWriter(FileRef f)
       : file(std::move(f)),
        buffer_appender(buffer.get_page_aligned_appender(
-                         g_conf()->bluefs_alloc_size / CEPH_PAGE_SIZE)) {
+                         g_conf()->bluefs_alloc_size / CEPH_PAGE_SIZE)), wal_header_filler(nullptr) {
       ++file->num_writers;
       iocv.fill(nullptr);
       dirty_devs.fill(false);
@@ -445,8 +450,16 @@ public:
       buffer_appender.append(encoded);
     }
 
-    void append_hole(uint64_t len) {
-      buffer.append_hole(len);
+    bufferlist::contiguous_filler append_hole(uint64_t len) {
+      return buffer.append_hole(len);
+    }
+    
+    void set_wal_header_filler(bufferlist::contiguous_filler *filler) {
+      wal_header_filler = filler;
+    }
+    
+    bufferlist::contiguous_filler* get_wal_header_filler() {
+      return wal_header_filler;
     }
 
     uint64_t get_effective_write_pos() {

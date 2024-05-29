@@ -4,6 +4,7 @@
 #define CEPH_OS_BLUESTORE_BLUEFS_TYPES_H
 
 #include <optional>
+#include <ostream>
 
 #include "bluestore_types.h"
 #include "include/utime.h"
@@ -431,4 +432,19 @@ struct bluefs_transaction_t {
 WRITE_CLASS_ENCODER(bluefs_transaction_t)
 
 std::ostream& operator<<(std::ostream& out, const bluefs_transaction_t& t);
+
+
+
+struct bluefs_wal_header_t {
+  uint64_t flush_length;
+  
+  bluefs_wal_header_t() : flush_length(0) {}
+  bluefs_wal_header_t(uint64_t flush_length) : flush_length(flush_length) {}
+  void bound_encode(size_t &s) const;
+  void encode(ceph::buffer::list& bl) const;
+  void encode(ceph::buffer::list::contiguous_filler& filler_in) const;
+  void decode(ceph::buffer::list::const_iterator& p);
+};
+WRITE_CLASS_ENCODER(bluefs_wal_header_t)
+
 #endif
