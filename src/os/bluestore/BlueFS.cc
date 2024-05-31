@@ -1641,7 +1641,7 @@ int BlueFS::_replay(bool noop, bool to_stdout)
         {
 	  bluefs_fnode_t fnode;
 	  decode(fnode, p);
-          ceph_assert(fnode.type == bluefs_node_type::LEGACY|| fnode.type == bluefs_node_type::WAL_V2);
+          ceph_assert(fnode.type == bluefs_node_type::LEGACY || fnode.type == bluefs_node_type::WAL_V2);
 	  dout(20) << __func__ << " 0x" << std::hex << pos << std::dec
                    << ":  op_file_update " << " " << fnode << " " << dendl;
           if (unlikely(to_stdout)) {
@@ -1802,9 +1802,7 @@ int BlueFS::_replay(bool noop, bool to_stdout)
       if (file->refs == 0) {
         continue;
       }
-      file->is_wal_read_loaded = true;
-      file->wal_flushes.clear();
-      _wal_update_size(file, 0, file->fnode.size);
+      _wal_update_size(file, file->fnode.size);
     }
   }
 
@@ -2239,7 +2237,7 @@ int BlueFS::migrate_wal_to_v1() {
       ceph_assert(unlink_ret == 0);
       file_migrated_count++;
     }
-    return -ENOSPC;
+    return -EIO;
   }
   
   // everything went okay, rename files
@@ -2428,10 +2426,14 @@ int64_t BlueFS::_read_random(
   return ret;
 }
 
-void BlueFS::_wal_update_size(FileRef file, uint64_t flush_offset, uint64_t increment) {
+void BlueFS::_wal_update_size(FileRef file, uint64_t increment) {
   using WALLength = File::WALFlush::WALLength;
   using WALMarker = File::WALFlush::WALMarker;
   
+  file->is_wal_read_loaded = true;
+  file->wal_flushes.clear();
+  
+  uint64_t flush_offset = 0;
   dout(20) 
       << fmt::format(
         "{} updating WAL file {} for range {:#x}~{:#x} limit is {:#x}", 
@@ -2468,8 +2470,8 @@ void BlueFS::_wal_update_size(FileRef file, uint64_t flush_offset, uint64_t incr
     // read marker
     bl.clear();
     uint64_t marker_offset = new_flush.get_marker_offset();
-    read_result = _read(h, marker_offset, sizeof(WALMarker), &bl, nullptr);
-    if (read_result < sizeof(WALMarker)) {
+    read_result = _read(h, marker_offset, new_flush.tail_size(), &bl, nullptr);
+    if (read_result < new_flush.tail_size()) {
       dout(20) << fmt::format("{} cannot read marker, most likely we are out of bounds. flush_offset={:#X}, marker_offset={:#X}", __func__, flush_offset, marker_offset) << dendl;
       break;
     }
@@ -3877,7 +3879,7 @@ int BlueFS::_flush_range_F(FileWriter *h, uint64_t offset, uint64_t length)
     bluefs_wal_header_t(flush_size).encode(*h->get_wal_header_filler());
     h->set_wal_header_filler(nullptr);
 
-    h->append(File::WALFlush::generate_hashed_marker(super.osd_uuid, h->file->fnode.ino));
+    h->append(h->file->wal_marker);
     h->file->fnode.wal_size += flush_size;
     h->file->fnode.wal_limit = h->file->fnode.get_allocated();
   }
@@ -4152,7 +4154,6 @@ int BlueFS::truncate(FileWriter *h, uint64_t offset)/*_WF_L*/
   vselector->sub_usage(h->file->vselector_hint, h->file->fnode.size - offset);
   h->file->fnode.size = offset;
   h->file->is_dirty = true;
-  // TODO(pere): update wal_size
   if (h->file->is_new_wal()) {
     // This assumption comes from reading logs of rocksdb+bluefs where a WAL file follows this pattern:
     // 1. create wal
@@ -4523,6 +4524,7 @@ int BlueFS::open_for_write(
     file->vselector_hint = vselector->get_hint_by_dir(dirname);
     if (boost::algorithm::ends_with(filename, ".log")) {
       file->fnode.type = WAL_V2;
+      file->wal_marker = File::WALFlush::generate_hashed_marker(super.osd_uuid, file->fnode.ino);
       file->is_wal_read_loaded = false;
     }
     nodes.file_map[ino_last] = file;
@@ -4570,6 +4572,7 @@ int BlueFS::open_for_write(
 
   if (boost::algorithm::ends_with(filename, ".log")) {
     file->fnode.type = WAL_V2;
+    file->wal_marker = File::WALFlush::generate_hashed_marker(super.osd_uuid, file->fnode.ino);
     (*h)->writer_type = BlueFS::WRITER_WAL;
     if (logger && !overwrite) {
       logger->inc(l_bluefs_files_written_wal);

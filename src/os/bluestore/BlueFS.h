@@ -264,8 +264,7 @@ public:
 
 
       static constexpr size_t header_size() {
-        // version, compat, struct length and struct
-        return 1 + 1 + 4 + sizeof(bluefs_wal_header_t);
+        return bluefs_wal_header_t::size();
       }
       
       static constexpr size_t tail_size() {
@@ -273,7 +272,7 @@ public:
       }
 
       uint64_t end_offset() {
-        return get_marker_offset() + sizeof(WALMarker);
+        return get_marker_offset() + tail_size();
       }
 
       uint64_t get_payload_offset() {
@@ -322,7 +321,8 @@ public:
     std::vector<WALFlush> wal_flushes; // to keep track of the amount of flushes we performed on a WAL file
                                        // so that we can easily recalculate real data offsets.
                                        // On "replay" this should be refilled in order to append data
-                                       // correctly. Nevertheless, replayed wal file most probably won't be reused.
+                                       // correctly. Nevertheless, replayed wal file most probably won't be reused
+    uint64_t wal_marker;
 
   private:
     FRIEND_MAKE_REF(File);
@@ -704,7 +704,7 @@ private:
   int _preallocate(FileRef f, uint64_t off, uint64_t len);
   int _truncate(FileWriter *h, uint64_t off);
 
-  void _wal_update_size(FileRef file, uint64_t flush_offset, uint64_t increment);
+  void _wal_update_size(FileRef file, uint64_t increment);
 
   int64_t _read_wal(
     FileReader *h,   ///< [in] read from here
