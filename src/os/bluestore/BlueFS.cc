@@ -2428,7 +2428,6 @@ int64_t BlueFS::_read_random(
 
 void BlueFS::_wal_update_size(FileRef file, uint64_t increment) {
   using WALLength = File::WALFlush::WALLength;
-  using WALMarker = File::WALFlush::WALMarker;
   
   file->is_wal_read_loaded = true;
   file->wal_flushes.clear();

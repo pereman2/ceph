@@ -440,6 +440,7 @@ struct bluefs_wal_header_t {
   
   bluefs_wal_header_t() : flush_length(0) {}
   bluefs_wal_header_t(uint64_t flush_length) : flush_length(flush_length) {}
+  static constexpr size_t size() { return (sizeof(__u8)*2) + sizeof(uint32_t) + sizeof(uint64_t); }
   void bound_encode(size_t &s) const;
   void encode(ceph::buffer::list& bl) const;
   void encode(ceph::buffer::list::contiguous_filler& filler_in) const;

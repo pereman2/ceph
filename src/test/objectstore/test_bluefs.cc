@@ -1400,7 +1400,7 @@ TEST(BlueFS, test_wal_write_multiple_recover_partial_reads) {
     }
 
     uint64_t read_chunks =  size / chunk_size; // WAL default chunk size is 32k
-    for (int chunk = 0; chunk < read_chunks; chunk++) {
+    for (uint64_t chunk = 0; chunk < read_chunks; chunk++) {
       BlueFS::FileReader *reader;
       ASSERT_EQ(0, fs.open_for_read(dir_db, wal_file, &reader));
       bufferlist read_bl;
