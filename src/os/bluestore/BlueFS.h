@@ -859,7 +859,7 @@ public:
 
   void append_try_flush(FileWriter *h, const char* buf, size_t len);
   void flush_range(FileWriter *h, uint64_t offset, uint64_t length);
-  int fsync(FileWriter *h);
+  int fsync(FileWriter *h, bool force_dirty = false);
   int64_t read(FileReader *h, uint64_t offset, size_t len,
 	   ceph::buffer::list *outbl, char *out) {
     // no need to hold the global lock here; we only touch h and

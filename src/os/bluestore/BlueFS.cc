@@ -1717,9 +1717,9 @@ int BlueFS::_replay(bool noop, bool to_stdout)
 	      vselector->sub_usage(f->vselector_hint, fnode);
 	    }
 	    fnode.claim_extents(delta.extents);
-            fnode.size = delta.size;
-            fnode.wal_limit = delta.wal_limit;
-            fnode.wal_size = delta.wal_size;
+      fnode.size = delta.size;
+      fnode.wal_limit = delta.wal_limit;
+      fnode.wal_size = delta.wal_size;
 	    dout(20) << __func__ << " 0x" << std::hex << pos << std::dec
 		     << ":  op_file_update_inc produced " << " " << fnode << " " << dendl;
 
@@ -2489,6 +2489,7 @@ void BlueFS::_wal_update_size(FileRef file, uint64_t increment) {
       dout(20) << fmt::format("{} recovering flush {:#x}~{:#x}", __func__, flush_offset, new_flush.length) << dendl;
       file->fnode.wal_size += new_flush.length;
       file->fnode.size += increase;
+      vselector->add_usage(file->vselector_hint, increase);
     }
 
     flush_offset += increase;
@@ -4168,7 +4169,7 @@ int BlueFS::truncate(FileWriter *h, uint64_t offset)/*_WF_L*/
   return 0;
 }
 
-int BlueFS::fsync(FileWriter *h)/*_WF_WD_WLD_WLNF_WNF*/
+int BlueFS::fsync(FileWriter *h, bool force_dirty)/*_WF_WD_WLD_WLNF_WNF*/
 {
   auto t0 = mono_clock::now();
   _maybe_check_vselector_LNF();
@@ -4181,7 +4182,7 @@ int BlueFS::fsync(FileWriter *h)/*_WF_WD_WLD_WLNF_WNF*/
     if (r < 0)
       return r;
     _flush_bdev(h);
-    if (h->file->is_dirty) {
+    if (h->file->is_dirty || force_dirty) {
       _signal_dirty_to_log_D(h);
       h->file->is_dirty = false;
     }
@@ -4623,6 +4624,11 @@ void BlueFS::_close_writer(FileWriter *h)
 }
 void BlueFS::close_writer(FileWriter *h)
 {
+  if (h->file->is_new_wal()) {
+    // we force fsync by forcing dirty flag
+    fsync(h, true);
+  }
+  
   {
     std::lock_guard l(h->lock);
     _drain_writer(h);
