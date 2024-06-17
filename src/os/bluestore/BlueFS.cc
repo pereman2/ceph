@@ -4804,11 +4804,15 @@ int BlueFS::stat(std::string_view dirname, std::string_view filename,
   File *file = q->second.get();
   dout(10) << __func__ << " " << dirname << "/" << filename
 	   << " " << file->fnode << dendl;
-  if (size)
-    *size = file->fnode.size;
-  if (file->is_new_wal()) {
-    *size = file->fnode.wal_size;
+				
+  if (size) {
+    if (file->is_new_wal()) {
+      *size = file->fnode.wal_size;
+    } else {
+      *size = file->fnode.size;
+    }
   }
+  
   if (mtime)
     *mtime = file->fnode.mtime;
   return 0;
