@@ -2460,7 +2460,13 @@ void BlueFS::_wal_update_size(FileRef file, uint64_t increment) {
     bl.hexdump(*_dout);
     *_dout << dendl;
     auto buffer_iterator = bl.cbegin();
-    decode(header, buffer_iterator);
+    try {
+      decode(header, buffer_iterator);
+    } catch(ceph::buffer::error& e) {
+      // EOF or corruption
+      dout(30) << fmt::format("couldn't decode wal flush header at offset {:#x}: {}", flush_offset, e.what()) << dendl;
+      break;
+    }
     
     WALLength flush_length = header.flush_length;
     dout(20) << __func__ << " flush_length " << flush_length << dendl;
@@ -2479,6 +2485,7 @@ void BlueFS::_wal_update_size(FileRef file, uint64_t increment) {
     decode(marker, buffer_iterator);
     if (marker != File::WALFlush::generate_hashed_marker(super.osd_uuid, file->fnode.ino)) {
       // EOF or corruption
+      dout(30) << fmt::format("reached eof or marker corruption {:#x}", flush_offset) << dendl;
       break;
     }
 
