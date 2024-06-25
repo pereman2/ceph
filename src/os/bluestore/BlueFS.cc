@@ -4529,10 +4529,10 @@ int BlueFS::open_for_write(
     file = ceph::make_ref<File>();
     file->fnode.ino = ++ino_last;
     file->vselector_hint = vselector->get_hint_by_dir(dirname);
-    if (boost::algorithm::ends_with(filename, ".log")) {
-      file->fnode.type = WAL_V2;
-      file->wal_marker = File::WALFlush::generate_hashed_marker(super.osd_uuid, file->fnode.ino);
-      file->is_wal_read_loaded = false;
+    if (boost::algorithm::ends_with(filename, ".log") && cct->_conf.get_val<bool>("bluefs_wal_v2")) {
+        file->fnode.type = WAL_V2;
+        file->wal_marker = File::WALFlush::generate_hashed_marker(super.osd_uuid, file->fnode.ino);
+        file->is_wal_read_loaded = false;
     }
     nodes.file_map[ino_last] = file;
     dir->file_map.emplace_hint(q, string{filename}, file);
@@ -4578,8 +4578,11 @@ int BlueFS::open_for_write(
   *h = _create_writer(file);
 
   if (boost::algorithm::ends_with(filename, ".log")) {
-    file->fnode.type = WAL_V2;
-    file->wal_marker = File::WALFlush::generate_hashed_marker(super.osd_uuid, file->fnode.ino);
+    bool use_wal_v2 = cct->_conf.get_val<bool>("bluefs_wal_v2");
+    if (use_wal_v2) {
+        file->fnode.type = WAL_V2;
+        file->wal_marker = File::WALFlush::generate_hashed_marker(super.osd_uuid, file->fnode.ino);
+    }
     (*h)->writer_type = BlueFS::WRITER_WAL;
     if (logger && !overwrite) {
       logger->inc(l_bluefs_files_written_wal);

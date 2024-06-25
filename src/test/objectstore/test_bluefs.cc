@@ -1530,6 +1530,68 @@ TEST(BlueFS, test_wal_write_truncate) {
 
 }
 
+TEST(BlueFS, test_wal_read_after_rollback_to_v1) {
+  // test whether we still read with v2 version even though new files will be v1
+  uint64_t size_wal = 1048576 * 64;
+  TempBdev bdev_wal{size_wal};
+  uint64_t size_db = 1048576 * 128;
+  TempBdev bdev_db{size_db};
+  uint64_t size_slow = 1048576 * 256;
+  TempBdev bdev_slow{size_slow};
+
+  ConfSaver conf(g_ceph_context->_conf);
+  conf.SetVal("bluefs_min_flush_size", "65536");
+  conf.ApplyChanges();
+
+  BlueFS fs(g_ceph_context);
+  ASSERT_EQ(0, fs.add_block_device(BlueFS::BDEV_WAL,  bdev_wal.path,  false));
+  ASSERT_EQ(0, fs.add_block_device(BlueFS::BDEV_DB,   bdev_db.path,   false));
+  ASSERT_EQ(0, fs.add_block_device(BlueFS::BDEV_SLOW, bdev_slow.path, false));
+  uuid_d fsid;
+  ASSERT_EQ(0, fs.mkfs(fsid, { BlueFS::BDEV_DB, true, true }));
+  ASSERT_EQ(0, fs.mount());
+  ASSERT_EQ(0, fs.maybe_verify_layout({ BlueFS::BDEV_DB, true, true }));
+
+  string dir_db = "db.wal";
+  ASSERT_EQ(0, fs.mkdir(dir_db));
+
+  string wal_file = "wal1.log";
+  BlueFS::FileWriter *writer;
+  ASSERT_EQ(0, fs.open_for_write(dir_db, wal_file, &writer, false));
+  ASSERT_NE(nullptr, writer);
+
+  bufferlist bl1;
+  auto gen_debugable = [](size_t amount, bufferlist& bl) {
+    for (size_t i = 0; i < amount; i++) {
+      bl.append('a');
+    }
+  };
+  gen_debugable(70000, bl1);
+  fs.append_try_flush(writer, bl1.c_str(), bl1.length());
+  fs.fsync(writer);
+
+  g_ceph_context->_conf.set_val("bluefs_wal_v2", "false");
+  fs.umount();
+  fs.mount();
+
+  BlueFS::FileReader *reader;
+  ASSERT_EQ(0, fs.open_for_read(dir_db, wal_file, &reader));
+  bufferlist read_bl;
+  fs.read(reader, 0, 70000, &read_bl, NULL);
+  ASSERT_TRUE(bl_eq(bl1, read_bl));
+  delete reader;
+
+  {
+    // open another file to ensure v1 is set correctly
+    string wal_file = "wal2.log";
+    BlueFS::FileWriter *writer;
+    ASSERT_EQ(0, fs.open_for_write(dir_db, wal_file, &writer, false));
+    ASSERT_NE(nullptr, writer);
+    ASSERT_EQ(writer->file->fnode.type, LEGACY);
+  }
+  fs.umount();
+}
+
 TEST(BlueFS, test_truncate_stable_53129) {
 
   ConfSaver conf(g_ceph_context->_conf);
