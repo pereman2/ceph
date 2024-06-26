@@ -645,7 +645,9 @@ private:
 
   /* signal replay log to include h->file in nearest log flush */
   int _signal_dirty_to_log_D(FileWriter *h);
+  void _maybe_allocate_fnode(FileRef& file, uint64_t end);
   int _flush_range_F(FileWriter *h, uint64_t offset, uint64_t length);
+  int _flush_wal_v2(FileWriter *h);
   int _flush_data(FileWriter *h, uint64_t offset, uint64_t length, bool buffered);
   int _flush_F(FileWriter *h, bool force, bool *flushed = nullptr);
   uint64_t _flush_special(FileWriter *h);

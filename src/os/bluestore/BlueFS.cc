@@ -3768,18 +3768,37 @@ void BlueFS::flush_range(FileWriter *h, uint64_t offset, uint64_t length)/*_WF*/
   _flush_range_F(h, offset, length);
 }
 
+void BlueFS::_maybe_allocate_fnode(FileRef& file, uint64_t end) {
+  uint64_t allocated = file->fnode.get_allocated();
+  // do not bother to dirty the file if we are overwriting
+  // previously allocated extents.
+  if (allocated < end) {
+    // we should never run out of log space here; see the min runway check
+    // in _flush_and_sync_log.
+    int r = _allocate(vselector->select_prefer_bdev(file->vselector_hint),
+		      end - allocated,
+                      0,
+		      &file->fnode,
+		      [&](const bluefs_extent_t& e) {
+		        vselector->add_usage(file->vselector_hint, e);
+	              });
+    if (r < 0) {
+      derr << __func__ << " allocated: 0x" << std::hex << allocated << std::dec
+           << " fnode " << file->fnode << dendl;
+      ceph_abort_msg("bluefs enospc");
+    }
+    file->is_dirty = true;
+  }
+}
+
 int BlueFS::_flush_range_F(FileWriter *h, uint64_t offset, uint64_t length)
 {
   auto t0 = mono_clock::now();
   ceph_assert(ceph_mutex_is_locked(h->lock));
   ceph_assert(h->file->num_readers.load() == 0);
   ceph_assert(h->file->fnode.ino > 1);
+  ceph_assert(!h->file->is_new_wal());
 
-  if (h->file->is_new_wal()) {
-    // WALFlush::WALLength is already appended at the start of first append_try_flush
-    // update length, offset is already updated with correct position
-    length += File::WALFlush::tail_size();
-  }
   uint64_t end = offset + length;
 
   dout(10) << __func__ << " " << h << " pos 0x" << std::hex << h->pos
@@ -3792,13 +3811,9 @@ int BlueFS::_flush_range_F(FileWriter *h, uint64_t offset, uint64_t length)
     return 0;
   }
 
-  bool buffered = cct->_conf->bluefs_buffered_io;
-
   if (end <= h->pos)
     return 0;
   if (offset < h->pos) {
-    // NOTE: let's assume that we do not overwrite wal
-    ceph_assert(!h->file->is_new_wal());
     length -= h->pos - offset;
     offset = h->pos;
     dout(10) << " still need 0x"
@@ -3808,50 +3823,59 @@ int BlueFS::_flush_range_F(FileWriter *h, uint64_t offset, uint64_t length)
   std::lock_guard file_lock(h->file->lock);
   ceph_assert(offset <= h->file->fnode.size);
 
-  uint64_t allocated = h->file->fnode.get_allocated();
-  // do not bother to dirty the file if we are overwriting
-  // previously allocated extents.
-  if (allocated < end) {
-    // we should never run out of log space here; see the min runway check
-    // in _flush_and_sync_log.
-    int r = _allocate(vselector->select_prefer_bdev(h->file->vselector_hint),
-		      end - allocated,
-                      0,
-		      &h->file->fnode,
-		      [&](const bluefs_extent_t& e) {
-		        vselector->add_usage(h->file->vselector_hint, e);
-	              });
-    if (r < 0) {
-      derr << __func__ << " allocated: 0x" << std::hex << allocated
-           << " offset: 0x" << offset << " length: 0x" << length << std::dec
-           << dendl;
-      ceph_abort_msg("bluefs enospc");
-      return r;
-    }
-    h->file->is_dirty = true;
-  }
+  _maybe_allocate_fnode(h->file, end);
+
   if (h->file->fnode.size < end) {
     vselector->add_usage(h->file->vselector_hint, end - h->file->fnode.size);
     h->file->fnode.size = end;
-    // Don't mark regular appends as dirty on WAL_V2. Note that allocations are marked as dirty.
-    if (!h->file->is_new_wal()) {
-      h->file->is_dirty = true;
-    }
-  }
-
-  if (h->file->is_new_wal()) {
-    // create WAL flush envelope
-    uint64_t flush_size = length - File::WALFlush::extra_envelope_size_on_front_and_tail();
-    ceph_assert(h->get_wal_header_filler() != nullptr);
-    bluefs_wal_header_t(flush_size).encode(*h->get_wal_header_filler());
-    h->set_wal_header_filler(nullptr);
-
-    h->append(h->file->wal_marker);
-    h->file->fnode.wal_size += flush_size;
-    h->file->fnode.wal_limit = h->file->fnode.get_allocated();
+    h->file->is_dirty = true;
   }
 
   dout(20) << __func__ << " file now, unflushed " << h->file->fnode << dendl;
+  bool buffered = cct->_conf->bluefs_buffered_io;
+  int res = _flush_data(h, offset, length, buffered);
+  logger->tinc(l_bluefs_flush_lat, mono_clock::now() - t0);
+  return res;
+}
+
+int BlueFS::_flush_wal_v2(FileWriter *h)
+{
+  auto t0 = mono_clock::now();
+  ceph_assert(ceph_mutex_is_locked(h->lock));
+  ceph_assert(h->file->num_readers.load() == 0);
+  ceph_assert(h->file->fnode.ino > 1);
+  ceph_assert(h->file->is_new_wal());
+  dout(10) << __func__ << " " << h << " pos 0x" << std::hex << h->pos
+           << "~" << h->get_buffer_length() + File::WALFlush::tail_size() << std::dec
+           << " to " << h->file->fnode
+           << " hint " << h->file->vselector_hint
+           << dendl;
+  // add tail of WALv2 envelope
+  h->append(h->file->wal_marker);
+
+  uint64_t flush_size = h->get_buffer_length() -
+    File::WALFlush::extra_envelope_size_on_front_and_tail();
+
+  // WALFlush::WALLength is already appended at the start of first append_try_flush
+  // update length, offset is already updated with correct position
+  ceph_assert(h->get_wal_header_filler() != nullptr);
+  bluefs_wal_header_t(flush_size).encode(*h->get_wal_header_filler());
+  h->set_wal_header_filler(nullptr); //TODO MEMLEAK??
+
+  uint64_t offset = h->pos;
+  uint64_t length = h->get_buffer_length();
+  uint64_t end = offset + length;
+  std::lock_guard file_lock(h->file->lock);
+  _maybe_allocate_fnode(h->file, end);
+
+  h->file->fnode.wal_size += flush_size;
+  h->file->fnode.wal_limit = h->file->fnode.get_allocated();
+
+  ceph_assert(h->file->fnode.size < end);
+  vselector->add_usage(h->file->vselector_hint, end - h->file->fnode.size);
+  h->file->fnode.size = end;
+
+  dout(20) << __func__ << " file now, unflushed " << h->file->fnode << dendl;  bool buffered = cct->_conf->bluefs_buffered_io;
   int res = _flush_data(h, offset, length, buffered);
   logger->tinc(l_bluefs_flush_lat, mono_clock::now() - t0);
   return res;
@@ -4054,7 +4078,7 @@ int BlueFS::_flush_F(FileWriter *h, bool force, bool *flushed)
            << std::hex << offset << "~" << length << std::dec
 	   << " to " << h->file->fnode << dendl;
   ceph_assert(h->pos <= h->file->fnode.size);
-  int r = _flush_range_F(h, offset, length);
+  int r = h->file->is_new_wal()?_flush_wal_v2(h):_flush_range_F(h, offset, length);
   if (flushed) {
     *flushed = true;
   }
