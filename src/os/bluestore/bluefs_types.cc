@@ -288,9 +288,6 @@ void bluefs_transaction_t::encode(bufferlist& bl) const
     bl.append(it.c_str(),  it.length());
   }
   encode(crc, bl);
-  if (struct_v >= 2) {
-    encode(wal_v2_count, bl);
-  }
   ENCODE_FINISH(bl);
 }
 
@@ -307,9 +304,6 @@ void bluefs_transaction_t::decode(bufferlist::const_iterator& p)
   if (actual != crc)
     throw ceph::buffer::malformed_input("bad crc " + stringify(actual)
 				  + " expected " + stringify(crc));
-  if (struct_v >= 2) {
-    decode(wal_v2_count, p);
-  }
 }
 
 void bluefs_transaction_t::dump(Formatter *f) const

@@ -444,7 +444,7 @@ public:
 
     void append(uint64_t value) {
       uint64_t l0 = get_buffer_length();
-      ceph_assert(l0 + sizeof(value) <= std::numeric_limits<unsigned>::max());
+      ceph_assert(l0 + sizeof(value) <= std::numeric_limits<uint64_t>::max());
       bufferlist encoded;
       encode(value, encoded);
       buffer_appender.append(encoded);
@@ -612,6 +612,8 @@ private:
   // used to trigger zeros into read (debug / verify)
   std::atomic<uint64_t> inject_read_zeros{0};
 
+  uint64_t wal_v2_count = 0;
+
   void _init_logger();
   void _shutdown_logger();
   void _update_logger_stats();
@@ -753,6 +755,11 @@ private:
       _check_vselector_LNF();
     }
   }
+
+  void inc_wal_v2_count(FileRef file);
+  void dec_wal_v2_count(FileRef file);
+  void encode_transaction(bufferlist& bl);
+
 public:
   BlueFS(CephContext* cct);
   ~BlueFS();

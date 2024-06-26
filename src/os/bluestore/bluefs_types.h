@@ -372,20 +372,18 @@ struct bluefs_transaction_t {
     encode((__u8)OP_DIR_REMOVE, op_bl);
     encode(dir, op_bl);
   }
-  void op_dir_link(std::string_view dir, std::string_view file, uint64_t ino, bool is_new_wal = false) {
+  void op_dir_link(std::string_view dir, std::string_view file, uint64_t ino) {
     using ceph::encode;
     encode((__u8)OP_DIR_LINK, op_bl);
     encode(dir, op_bl);
     encode(file, op_bl);
     encode(ino, op_bl);
-    wal_v2_count += is_new_wal;
   }
-  void op_dir_unlink(std::string_view dir, std::string_view file, bool is_new_wal = false) {
+  void op_dir_unlink(std::string_view dir, std::string_view file) {
     using ceph::encode;
     encode((__u8)OP_DIR_UNLINK, op_bl);
     encode(dir, op_bl);
     encode(file, op_bl);
-    wal_v2_count = wal_v2_count > 0 ? wal_v2_count - is_new_wal : 0;
   }
   void op_file_update(bluefs_fnode_t& file) {
     using ceph::encode;
