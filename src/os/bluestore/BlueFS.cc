@@ -1311,8 +1311,6 @@ int BlueFS::_replay(bool noop, bool to_stdout)
 
   boost::dynamic_bitset<uint64_t> used_blocks[MAX_BDEV];
 
-  set<FileRef> wal_files_to_update; // list of Files to get list of flushes with _wal_update_size 
-
   if (!noop) {
     if (cct->_conf->bluefs_log_replay_check_allocations) {
       for (size_t i = 0; i < MAX_BDEV; ++i) {
@@ -1663,10 +1661,6 @@ int BlueFS::_replay(bool noop, bool to_stdout)
 	    }
             f->fnode = fnode;
 
-            if (f->is_new_wal()) {
-              wal_files_to_update.insert(f);
-            }
-
 	    if (fnode.ino > ino_last) {
 	      ino_last = fnode.ino;
 	    }
@@ -1796,13 +1790,14 @@ int BlueFS::_replay(bool noop, bool to_stdout)
     log.t.seq = log.seq_live;
     dirty.seq_stable = log_seq;
 
-
-    for (FileRef file : wal_files_to_update) {
-      dout(5) << __func__ << " " << file << " " << file->refs << dendl;
-      if (file->refs == 0) {
-        continue;
+    for (const auto &[filename, file] : nodes.file_map) {
+      if (file->is_new_wal()) {
+          dout(5) << __func__ << " " << file << " " << file->refs << dendl;
+          if (file->refs == 0) {
+            continue;
+          }
+          _wal_update_size(file, file->fnode.size);
       }
-      _wal_update_size(file, file->fnode.size);
     }
   }
 
@@ -2141,27 +2136,21 @@ int BlueFS::migrate_wal_to_v1() {
   
   DirRef dir = dir_it->second;
   
-  auto file_it = dir->file_map.begin();
-  size_t number_of_wal_v2 = 0;
+
   size_t wal_v2_aggregated_size = 0;
   std::vector<std::pair<string, FileRef>> files_to_migrate;
   files_to_migrate.reserve(dir->file_map.size());
-  
+
   // get info about wal files
-  while(file_it != dir->file_map.end()) {
-    string file_name = file_it->first;
-    FileRef file = file_it->second;
+  for (const auto& [file_name, file] : dir->file_map) {
     if(file->is_new_wal()) {
-      number_of_wal_v2++;
       wal_v2_aggregated_size += file->fnode.wal_size;
       files_to_migrate.push_back({ file_name, file });
     }
-    file_it++;
   }
-  
+
   // check free space
-  uint8_t wal_bdev = vselector->select_prefer_bdev(vselector->get_hint_by_dir("db.wal"));
-  uint64_t free_space = alloc[wal_bdev]->get_free();
+  uint64_t free_space = alloc[BDEV_WAL]->get_free();
   if (free_space < wal_v2_aggregated_size) {
     dout(1) << fmt::format("{} Error trying to migrate new WAL V2 to V1. Aggregated size of WAL files is {}, free space is {}", __func__, wal_v2_aggregated_size, free_space) << dendl;
     return -ENOSPC;
