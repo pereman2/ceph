@@ -1462,7 +1462,7 @@ TEST(BlueFS, test_wal_migrate) {
 
   BlueFS::FileReader *reader;
   ASSERT_EQ(0, fs.open_for_read(dir_db, wal_file, &reader));
-  ASSERT_EQ(reader->file->fnode.type, bluefs_node_type::LEGACY);
+  ASSERT_EQ(reader->file->fnode.type, bluefs_node_type::REGULAR);
   ASSERT_EQ(reader->file->is_new_wal(), false);
   
   bufferlist read_bl;
@@ -1587,7 +1587,7 @@ TEST(BlueFS, test_wal_read_after_rollback_to_v1) {
     BlueFS::FileWriter *writer;
     ASSERT_EQ(0, fs.open_for_write(dir_db, wal_file, &writer, false));
     ASSERT_NE(nullptr, writer);
-    ASSERT_EQ(writer->file->fnode.type, LEGACY);
+    ASSERT_EQ(writer->file->fnode.type, REGULAR);
   }
   fs.umount();
 }

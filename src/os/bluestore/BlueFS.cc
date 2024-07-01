@@ -1641,7 +1641,7 @@ int BlueFS::_replay(bool noop, bool to_stdout)
         {
 	  bluefs_fnode_t fnode;
 	  decode(fnode, p);
-          ceph_assert(fnode.type == bluefs_node_type::LEGACY || fnode.type == bluefs_node_type::WAL_V2);
+          ceph_assert(fnode.type == bluefs_node_type::REGULAR || fnode.type == bluefs_node_type::WAL_V2);
 	  dout(20) << __func__ << " 0x" << std::hex << pos << std::dec
                    << ":  op_file_update " << " " << fnode << " " << dendl;
           if (unlikely(to_stdout)) {
@@ -2173,8 +2173,8 @@ int BlueFS::migrate_wal_to_v1() {
     });
     
     // use normal v1 write path by marking node type to legacy
-    writer->file->fnode.type = bluefs_node_type::LEGACY;
-    
+    writer->file->fnode.type = bluefs_node_type::REGULAR;
+
     FileReader* previous_reader;
     r = open_for_read(wal_dir, name, &previous_reader);
     auto read_writer_path = make_scope_guard([&] {
@@ -2429,7 +2429,7 @@ void BlueFS::_wal_update_size(FileRef file, uint64_t increment) {
         "{} updating WAL file {} for range {:#x}~{:#x} limit is {:#x}", 
         __func__, file->fnode.ino, flush_offset, increment, file->fnode.wal_limit) 
       << dendl;
-  ceph_assert((flush_offset == 0 && file->wal_flushes.empty()) || (flush_offset == file->wal_flushes.back().end_offset()));
+  ceph_assert(file->wal_flushes.empty());
 
   FileReader *h = new FileReader(file, cct->_conf->bluefs_max_prefetch, false, true);
   
@@ -3564,7 +3564,7 @@ void BlueFS::_flush_and_sync_log_core()
 
   bufferlist bl;
   bl.reserve(super.block_size);
-  encode(log.t, bl);
+  encode_transaction(bl);
   // pad to block boundary
   size_t realign = super.block_size - (bl.length() % super.block_size);
   if (realign && realign != super.block_size)

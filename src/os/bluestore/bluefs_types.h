@@ -35,7 +35,7 @@ public:
 WRITE_CLASS_DENC(bluefs_extent_t)
 
 enum bluefs_node_type {
-  LEGACY = 0,
+  REGULAR = 0,
   WAL_V2 = 1,
   NODE_TYPE_END = 0x100,
 };
@@ -53,7 +53,7 @@ struct bluefs_fnode_delta_t {
   // only relevant in case of wal node
   uint64_t wal_limit;
   uint64_t wal_size;
-  uint8_t type = 0;
+  uint8_t type = REGULAR;
 
 
   mempool::bluefs::vector<bluefs_extent_t> extents;
@@ -79,9 +79,6 @@ struct bluefs_fnode_delta_t {
       denc(type, p);
       denc(wal_limit, p);
       denc(wal_size, p);
-    }
-    if (struct_v == 1) {
-    	type = LEGACY;
     }
     DENC_FINISH(p);
 
@@ -130,9 +127,9 @@ struct bluefs_fnode_t {
 
   uint64_t allocated;
   uint64_t allocated_commited;
-  uint8_t type = 0; // was prefer_bdev
+  uint8_t type = REGULAR;
   uint64_t wal_limit; // EOF of wal, this limit represents upper limit of fnode.size, not upper limit of wal_size
-  uint64_t wal_size; // Size we expect is in WAL, there could be more on power off instances in range of wal_size~wal_limit
+  uint64_t wal_size; // Amount of payload bytes in WAL(not including envelope data), there could be more on power off instances, in range of wal_size~wal_limit
 
   bluefs_fnode_t() : ino(0), size(0), allocated(0), allocated_commited(0), wal_limit(0), wal_size(0) {}
   bluefs_fnode_t(uint64_t _ino, uint64_t _size, utime_t _mtime) :
@@ -182,7 +179,7 @@ struct bluefs_fnode_t {
       denc(wal_size, p);
     }
     if (struct_v == 1) {
-    	type = LEGACY;
+    	type = REGULAR;
     }
     DENC_FINISH(p);
     recalc_allocated();
