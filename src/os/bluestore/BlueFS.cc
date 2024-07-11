@@ -1173,9 +1173,13 @@ int BlueFS::fsck()
   return 0;
 }
 
-int BlueFS::_write_super(int dev)
+int BlueFS::_write_super(int dev, bool skip_set_wal_v2)
 {
   ++super.version;
+  bool use_wal_v2 = cct->_conf.get_val<bool>("bluefs_wal_v2");
+  if ((!skip_set_wal_v2) && (super.wal_v2 || use_wal_v2)) {
+    super.wal_v2 = true;
+  }
   // build superblock
   bufferlist bl;
   encode(super, bl);
@@ -1564,7 +1568,6 @@ int BlueFS::_replay(bool noop, bool to_stdout)
 
 	    q->second->file_map[filename] = file;
 	    ++file->refs;
-			inc_wal_v2_count(file);
 	  }
 	}
 	break;
@@ -1593,7 +1596,6 @@ int BlueFS::_replay(bool noop, bool to_stdout)
       ceph_assert(file->refs > 0); 
 	    --file->refs;
 	    q->second->file_map.erase(r);
-			inc_wal_v2_count(file);
 	  }
 	}
 	break;
@@ -2246,12 +2248,17 @@ int BlueFS::migrate_wal_to_v1() {
     file_migrated_count++;
   }
   
+  // Ensure no dangling wal v2 files are inside transactions.
+  _compact_log_sync_LNF_LD();
+  
+  // Ensure super block is updated
+  super.wal_v2 = false;
+  _write_super(BDEV_DB, false);
+  
+  
   dout(5) << fmt::format("{} success moving data", __func__) << dendl;
   
   return 0;
-  
-  
-  
 }
 
 BlueFS::FileRef BlueFS::_get_file(uint64_t ino)
@@ -2846,7 +2853,6 @@ void BlueFS::_compact_log_dump_metadata_NF(uint64_t start_seq,
   t->uuid = super.uuid;
 
   std::lock_guard nl(nodes.lock);
-  wal_v2_count = 0;
 
   for (auto& [ino, file_ref] : nodes.file_map) {
     if (ino == 1)
@@ -2892,7 +2898,6 @@ void BlueFS::_compact_log_dump_metadata_NF(uint64_t start_seq,
       dout(20) << __func__ << " op_dir_link " << path << "/" << fname
 	       << " to " << file_ref->fnode.ino << dendl;
       t->op_dir_link(path, fname, file_ref->fnode.ino);
-      inc_wal_v2_count(file_ref);
     }
   }
 }
@@ -3564,7 +3569,7 @@ void BlueFS::_flush_and_sync_log_core()
 
   bufferlist bl;
   bl.reserve(super.block_size);
-  encode_transaction(bl);
+  encode(log.t, bl);
   // pad to block boundary
   size_t realign = super.block_size - (bl.length() % super.block_size);
   if (realign && realign != super.block_size)
@@ -4562,7 +4567,6 @@ int BlueFS::open_for_write(
   log.t.op_file_update(file->fnode);
   if (create) {
     log.t.op_dir_link(dirname, filename, file->fnode.ino);
-    inc_wal_v2_count(file);
   }
 
   std::lock_guard dl(dirty.lock);
@@ -4730,7 +4734,6 @@ int BlueFS::rename(
 	     << " already exists, unlinking" << dendl;
     ceph_assert(q->second != file);
     log.t.op_dir_unlink(new_dirname, new_filename);
-    dec_wal_v2_count(file);
     _drop_link_D(q->second);
   }
 
@@ -4851,7 +4854,6 @@ int BlueFS::lock_file(std::string_view dirname, std::string_view filename,
     ++file->refs;
     log.t.op_file_update(file->fnode);
     log.t.op_dir_link(dirname, filename, file->fnode.ino);
-    inc_wal_v2_count(file);
   } else {
     file = q->second;
     if (file->locked) {
@@ -4934,7 +4936,6 @@ int BlueFS::unlink(std::string_view dirname, std::string_view filename)/*_LND*/
   }
   dir->file_map.erase(q);
   log.t.op_dir_unlink(dirname, filename);
-  dec_wal_v2_count(file);
   _drop_link_D(file);
   logger->tinc(l_bluefs_unlink_lat, mono_clock::now() - t0);
 
@@ -5173,26 +5174,6 @@ void BlueFS::_check_vselector_LNF() {
     f.second->lock.unlock();
   }
   delete vs;
-}
-
-void BlueFS::inc_wal_v2_count(FileRef file) {
-    if (!file->is_new_wal()) {
-        return;
-    }
-    wal_v2_count++;
-}
-
-void BlueFS::dec_wal_v2_count(FileRef file) {
-    if (!file->is_new_wal()) {
-        return;
-    }
-    ceph_assert(wal_v2_count > 0);
-    wal_v2_count--;
-}
-
-void BlueFS::encode_transaction(bufferlist& bl) {
-    log.t.wal_v2_count = wal_v2_count;
-    encode(log.t, bl);
 }
 
 size_t BlueFS::probe_alloc_avail(int dev, uint64_t alloc_size)

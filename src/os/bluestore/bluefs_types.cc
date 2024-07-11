@@ -77,13 +77,19 @@ void bluefs_layout_t::generate_test_instances(list<bluefs_layout_t*>& ls)
 }
 
 // bluefs_super_t
-bluefs_super_t::bluefs_super_t() : version(0), block_size(4096) {
+bluefs_super_t::bluefs_super_t() : version(0), block_size(4096), wal_v2(false) {
   bluefs_max_alloc_size.resize(BlueFS::MAX_BDEV, 0);
 }
 
 void bluefs_super_t::encode(bufferlist& bl) const
 {
-  ENCODE_START(3, 1, bl);
+  __u8 _version = 3;
+  __u8 _compat = 1;
+  if (wal_v2) {
+    _version = 4;
+    _compat = 4;
+  }
+  ENCODE_START(_version, _compat, bl);
   encode(uuid, bl);
   encode(osd_uuid, bl);
   encode(version, bl);
@@ -96,7 +102,7 @@ void bluefs_super_t::encode(bufferlist& bl) const
 
 void bluefs_super_t::decode(bufferlist::const_iterator& p)
 {
-  DECODE_START(3, p);
+  DECODE_START(4, p);
   decode(uuid, p);
   decode(osd_uuid, p);
   decode(version, p);

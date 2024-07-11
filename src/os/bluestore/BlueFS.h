@@ -612,8 +612,6 @@ private:
   // used to trigger zeros into read (debug / verify)
   std::atomic<uint64_t> inject_read_zeros{0};
 
-  std::atomic<uint64_t> wal_v2_count = 0;
-
   void _init_logger();
   void _shutdown_logger();
   void _update_logger_stats();
@@ -727,7 +725,7 @@ private:
     char *out);      ///< [out] optional: or copy it here
 
   int _open_super();
-  int _write_super(int dev);
+  int _write_super(int dev, bool skip_set_wal_v2 = false);
   int _check_allocations(const bluefs_fnode_t& fnode,
     boost::dynamic_bitset<uint64_t>* used_blocks,
     bool is_alloc, //true when allocating, false when deallocating
@@ -755,10 +753,6 @@ private:
       _check_vselector_LNF();
     }
   }
-
-  void inc_wal_v2_count(FileRef file);
-  void dec_wal_v2_count(FileRef file);
-  void encode_transaction(bufferlist& bl);
 
 public:
   BlueFS(CephContext* cct);
