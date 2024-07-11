@@ -142,7 +142,7 @@ Commands
    
 :command: `migrate-wal-to-v1` --path *osd path*
 
-   Changes WAL disk format from the a newer version to the legacy one. Useful for downgrades, or if you
+   Changes WAL disk format from the new version to the legacy one. Useful for downgrades, or if you
    might want to disable this new feature (bluefs_wal_v2).
 
 Options
