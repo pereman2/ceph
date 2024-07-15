@@ -2154,7 +2154,9 @@ int BlueFS::migrate_wal_to_v1() {
   }
 
   // check free space
-  uint64_t free_space = alloc[BDEV_WAL]->get_free();
+  uint64_t hint = BDEV_WAL;
+  uint8_t prefer_bdev = vselector->select_prefer_bdev((void*)&hint);
+  uint64_t free_space = alloc[prefer_bdev]->get_free();
   if (free_space < wal_v2_aggregated_size) {
     dout(1) << fmt::format("{} Error trying to migrate new WAL V2 to V1. Aggregated size of WAL files is {}, free space is {}", __func__, wal_v2_aggregated_size, free_space) << dendl;
     return -ENOSPC;
