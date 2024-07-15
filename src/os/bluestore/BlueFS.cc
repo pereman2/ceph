@@ -2131,6 +2131,7 @@ int BlueFS::device_migrate_to_new(
 }
 
 int BlueFS::migrate_wal_to_v1() {
+  _init_logger();
   string wal_dir("db.wal");
   auto dir_it = nodes.dir_map.find(wal_dir);
   if (dir_it == nodes.dir_map.end()) {
@@ -2255,7 +2256,7 @@ int BlueFS::migrate_wal_to_v1() {
   
   // Ensure super block is updated
   super.wal_v2 = false;
-  _write_super(BDEV_DB, false);
+  _write_super(BDEV_DB, true);
   
   
   dout(5) << fmt::format("{} success moving data", __func__) << dendl;
