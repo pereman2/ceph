@@ -10269,17 +10269,29 @@ int BlueStore::_fsck(BlueStore::FSCKDepth depth, bool repair)
 }
 
 int BlueStore::migrate_wal_to_v1() {
-  dout(5) << __func__ << dendl;
-
-  int r = _open_db_and_around(false);
+  int r = _mount_readonly();
   if (r < 0) {
     return r;
   }
-  auto close_db = make_scope_guard([&] {
-    _close_db_and_around();
-  });
-  return bluefs->migrate_wal_to_v1();
-	
+  
+  if (int r = _open_super_meta(); r < 0) {
+    return r;
+  }
+  
+  if (int r = _open_fm(nullptr, false, false); r < 0) {
+    return r;
+  }
+
+  if (int r = _init_alloc(nullptr); r < 0) {
+    return r;
+    
+  }
+  r = bluefs->migrate_wal_to_v1();
+  _close_alloc();
+  _close_fm();
+  _umount_readonly();
+  return r;
+  
 }
 
 int BlueStore::_fsck_on_open(BlueStore::FSCKDepth depth, bool repair)
