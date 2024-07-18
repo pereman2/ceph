@@ -68,7 +68,7 @@ struct bluefs_fnode_delta_t {
     _denc_friend(*this, p);
   }
   void decode(ceph::buffer::ptr::const_iterator& p) {
-    DENC_START(2, 2, p);
+    DENC_START_COMPAT_2(2, 2, p);
     denc_varint(ino, p);
     denc_varint(size, p);
     denc(mtime, p);
@@ -92,7 +92,7 @@ struct bluefs_fnode_delta_t {
       version = 2;
       compat = 2;
     }
-    DENC_START(version, compat, p);
+    DENC_START_UNSAFE(version, compat, p);
 
     denc_varint(v.ino, p);
     denc_varint(v.size, p);
@@ -167,7 +167,7 @@ struct bluefs_fnode_t {
   }
 
   void decode(ceph::buffer::ptr::const_iterator& p) {
-    DENC_START(2, 2, p);
+    DENC_START_COMPAT_2(2, 2, p);
     denc_varint(ino, p);
     denc_varint(size, p);
     denc(mtime, p);
@@ -194,7 +194,7 @@ struct bluefs_fnode_t {
       version = 2;
       compat = 2;
     }
-    DENC_START(version, compat, p);
+    DENC_START_UNSAFE(version, compat, p);
     denc_varint(v.ino, p);
     denc_varint(v.size, p);
     denc(v.mtime, p);
