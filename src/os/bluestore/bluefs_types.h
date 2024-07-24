@@ -68,7 +68,7 @@ struct bluefs_fnode_delta_t {
     _denc_friend(*this, p);
   }
   void decode(ceph::buffer::ptr::const_iterator& p) {
-    DENC_START_COMPAT_2(2, 2, p);
+    DENC_START_UNSAFE(2, 2, p);
     denc_varint(ino, p);
     denc_varint(size, p);
     denc(mtime, p);

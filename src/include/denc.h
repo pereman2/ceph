@@ -1877,6 +1877,8 @@ inline std::enable_if_t<traits::supported && !traits::featured> decode_nohead(
   _denc_start(p, &struct_v, &struct_compat, &_denc_pchar, &_denc_u32);	\
   do {
   
+// This variant is unsafe, because older versions will not even catch incompatibility.
+// The ability to decode must be verified by other means,
 #define DENC_START_UNSAFE(v, compat, p)				\
   __u8 struct_v = v;							\
   __u8 struct_compat = compat;						\
