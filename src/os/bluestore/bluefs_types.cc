@@ -276,13 +276,6 @@ void bluefs_transaction_t::encode(bufferlist& bl) const
   uint32_t crc = op_bl.crc32c(-1);
   __u8 version = 1;
   __u8 compat = 1;
-  if (wal_v2_count > 0) {
-    // This is a unfortunate trick to deal with missing version/compat checks on DENC_START while decoding bluefs_fnode_t and 
-    // bluefs_fnode_delta_t. Since ENCODE_START does include version assertions, we move logic of wal version to transactions 
-    // because transactions can be short lived and removed from new WAL versions enabling potetial osd downgrades.
-    version = 2;
-    compat = 2;
-  }
   ENCODE_START(version, compat, bl);
   encode(uuid, bl);
   encode(seq, bl);

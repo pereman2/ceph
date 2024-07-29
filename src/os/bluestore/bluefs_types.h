@@ -346,8 +346,7 @@ struct bluefs_transaction_t {
   uuid_d uuid;          ///< fs uuid
   uint64_t seq;         ///< sequence number
   ceph::buffer::list op_bl;     ///< encoded transaction ops
-  uint64_t wal_v2_count;
-  bluefs_transaction_t() : seq(0), wal_v2_count(0) {}
+  bluefs_transaction_t() : seq(0) {}
 
   void clear() {
     *this = bluefs_transaction_t();
