@@ -1541,6 +1541,7 @@ TEST(BlueFS, test_wal_read_after_rollback_to_v1) {
 
   ConfSaver conf(g_ceph_context->_conf);
   conf.SetVal("bluefs_min_flush_size", "65536");
+  conf.SetVal("bluefs_wal_v2", "true");
   conf.ApplyChanges();
 
   BlueFS fs(g_ceph_context);
@@ -1558,6 +1559,7 @@ TEST(BlueFS, test_wal_read_after_rollback_to_v1) {
   string wal_file = "wal1.log";
   BlueFS::FileWriter *writer;
   ASSERT_EQ(0, fs.open_for_write(dir_db, wal_file, &writer, false));
+  ASSERT_EQ(writer->file->fnode.type, WAL_V2);
   ASSERT_NE(nullptr, writer);
 
   bufferlist bl1;
