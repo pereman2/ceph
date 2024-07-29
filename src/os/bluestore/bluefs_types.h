@@ -308,7 +308,7 @@ struct bluefs_super_t {
   std::optional<bluefs_layout_t> memorized_layout;
 
   std::vector<uint64_t> bluefs_max_alloc_size;
-  bool wal_v2;
+  uint8_t wal_v2;
 
   bluefs_super_t();
 

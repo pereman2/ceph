@@ -85,7 +85,7 @@ void bluefs_super_t::encode(bufferlist& bl) const
 {
   __u8 _version = 3;
   __u8 _compat = 1;
-  if (wal_v2) {
+  if (wal_v2 > 1) {
     _version = 4;
     _compat = 4;
   }
@@ -97,6 +97,9 @@ void bluefs_super_t::encode(bufferlist& bl) const
   encode(log_fnode, bl);
   encode(memorized_layout, bl);
   encode(bluefs_max_alloc_size, bl);
+  if (_version >= 4) {
+    encode(wal_v2, bl);
+  }
   ENCODE_FINISH(bl);
 }
 
@@ -115,6 +118,9 @@ void bluefs_super_t::decode(bufferlist::const_iterator& p)
     decode(bluefs_max_alloc_size, p);
   } else {
     std::fill(bluefs_max_alloc_size.begin(), bluefs_max_alloc_size.end(), 0);
+  }
+  if (struct_v >= 4) {
+    decode(wal_v2, p);
   }
   DECODE_FINISH(p);
 }

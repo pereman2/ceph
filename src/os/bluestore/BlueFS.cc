@@ -1173,12 +1173,15 @@ int BlueFS::fsck()
   return 0;
 }
 
-int BlueFS::_write_super(int dev, bool skip_set_wal_v2)
+int BlueFS::_write_super(int dev, bool force_wal_v1)
 {
   ++super.version;
   bool use_wal_v2 = cct->_conf.get_val<bool>("bluefs_wal_v2");
-  if ((!skip_set_wal_v2) && (super.wal_v2 || use_wal_v2)) {
-    super.wal_v2 = true;
+  if (use_wal_v2) {
+    super.wal_v2 = 1;
+  }
+  if (force_wal_v1) {
+    super.wal_v2 = 0;
   }
   // build superblock
   bufferlist bl;
@@ -2217,7 +2220,11 @@ int BlueFS::migrate_wal_to_v1() {
     // todo things left to read, do cleanup
     
     int fsync_ret = fsync(writer);
-    ceph_assert(fsync_ret ==  0);
+    if (fsync_ret != 0) {
+      derr << fmt::format("{} fsync error {} while moving data for file {} ", __func__, fsync_ret, name) << dendl;
+      failure_while_migrating = true;
+      break;
+    }
     
     file_migrated_count++;
   }
