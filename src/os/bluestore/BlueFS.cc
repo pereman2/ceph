@@ -11,6 +11,7 @@
 #include "common/errno.h"
 #include "common/perf_counters.h"
 #include "Allocator.h"
+#include "include/buffer_fwd.h"
 #include "include/ceph_assert.h"
 #include "common/admin_socket.h"
 #include "os/bluestore/bluefs_types.h"
@@ -4030,7 +4031,7 @@ void BlueFS::append_try_flush(FileWriter *h, const char* buf, size_t len)/*_WF_L
       size_t size = 0;
       bluefs_wal_header_t().bound_encode(size);
       bufferlist::contiguous_filler filler = h->append_hole(size);
-      h->set_wal_header_filler(new bufferlist::contiguous_filler(filler));
+      h->set_wal_header_filler(std::make_unique<bufferlist::contiguous_filler>(bufferlist::contiguous_filler(filler)));
     }
 
     size_t max_size = 1ull << 30; // cap to 1GB

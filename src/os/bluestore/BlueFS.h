@@ -390,7 +390,7 @@ public:
       const unsigned length,
       const bluefs_super_t& super);
     ceph::buffer::list::page_aligned_appender buffer_appender;  //< for const char* only
-    bufferlist::contiguous_filler* wal_header_filler; // To encode bluefs_wal_header_t we need to save the location of the header we want to fill
+    std::unique_ptr<bufferlist::contiguous_filler> wal_header_filler; // To encode bluefs_wal_header_t we need to save the location of the header we want to fill
   public:
     int writer_type = 0;    ///< WRITER_*
     int write_hint = WRITE_LIFE_NOT_SET;
@@ -454,12 +454,12 @@ public:
       return buffer.append_hole(len);
     }
     
-    void set_wal_header_filler(bufferlist::contiguous_filler *filler) {
-      wal_header_filler = filler;
+    void set_wal_header_filler(std::unique_ptr<bufferlist::contiguous_filler> filler) {
+      wal_header_filler.swap(filler); 
     }
     
     bufferlist::contiguous_filler* get_wal_header_filler() {
-      return wal_header_filler;
+      return wal_header_filler.get();
     }
 
     uint64_t get_effective_write_pos() {
