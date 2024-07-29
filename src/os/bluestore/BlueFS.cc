@@ -1173,15 +1173,15 @@ int BlueFS::fsck()
   return 0;
 }
 
-int BlueFS::_write_super(int dev, bool force_wal_v1)
+int BlueFS::_write_super(int dev, bool wal_version)
 {
   ++super.version;
   bool use_wal_v2 = cct->_conf.get_val<bool>("bluefs_wal_v2");
   if (use_wal_v2) {
-    super.wal_v2 = 1;
+    super.wal_version = 2;
   }
-  if (force_wal_v1) {
-    super.wal_v2 = 0;
+  if (wal_version > 0) {
+    super.wal_version = wal_version;
   }
   // build superblock
   bufferlist bl;
@@ -2260,8 +2260,6 @@ int BlueFS::migrate_wal_to_v1() {
   // Ensure no dangling wal v2 files are inside transactions.
   _compact_log_sync_LNF_LD();
   
-  // Ensure super block is updated
-  super.wal_v2 = false;
   _write_super(BDEV_DB, true);
   
   

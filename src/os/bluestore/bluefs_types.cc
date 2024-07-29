@@ -77,7 +77,7 @@ void bluefs_layout_t::generate_test_instances(list<bluefs_layout_t*>& ls)
 }
 
 // bluefs_super_t
-bluefs_super_t::bluefs_super_t() : version(0), block_size(4096), wal_v2(false) {
+bluefs_super_t::bluefs_super_t() : version(0), block_size(4096), wal_version(1) {
   bluefs_max_alloc_size.resize(BlueFS::MAX_BDEV, 0);
 }
 
@@ -85,7 +85,7 @@ void bluefs_super_t::encode(bufferlist& bl) const
 {
   __u8 _version = 3;
   __u8 _compat = 1;
-  if (wal_v2 > 1) {
+  if (wal_version >= 2) {
     _version = 4;
     _compat = 4;
   }
@@ -98,7 +98,7 @@ void bluefs_super_t::encode(bufferlist& bl) const
   encode(memorized_layout, bl);
   encode(bluefs_max_alloc_size, bl);
   if (_version >= 4) {
-    encode(wal_v2, bl);
+    encode(wal_version, bl);
   }
   ENCODE_FINISH(bl);
 }
@@ -120,7 +120,7 @@ void bluefs_super_t::decode(bufferlist::const_iterator& p)
     std::fill(bluefs_max_alloc_size.begin(), bluefs_max_alloc_size.end(), 0);
   }
   if (struct_v >= 4) {
-    decode(wal_v2, p);
+    decode(wal_version, p);
   }
   DECODE_FINISH(p);
 }
@@ -280,9 +280,7 @@ void bluefs_transaction_t::bound_encode(size_t &s) const {
 void bluefs_transaction_t::encode(bufferlist& bl) const
 {
   uint32_t crc = op_bl.crc32c(-1);
-  __u8 version = 1;
-  __u8 compat = 1;
-  ENCODE_START(version, compat, bl);
+  ENCODE_START(1, 1, bl);
   encode(uuid, bl);
   encode(seq, bl);
   // not using bufferlist encode method, as it merely copies the bufferptr and not
@@ -299,7 +297,7 @@ void bluefs_transaction_t::encode(bufferlist& bl) const
 void bluefs_transaction_t::decode(bufferlist::const_iterator& p)
 {
   uint32_t crc;
-  DECODE_START(2, p);
+  DECODE_START(1, p);
   decode(uuid, p);
   decode(seq, p);
   decode(op_bl, p);
