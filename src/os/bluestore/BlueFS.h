@@ -725,7 +725,7 @@ private:
     char *out);      ///< [out] optional: or copy it here
 
   int _open_super();
-  int _write_super(int dev, bool wal_version = 1);
+  int _write_super(int dev, uint8_t wal_version = 1);
   int _check_allocations(const bluefs_fnode_t& fnode,
     boost::dynamic_bitset<uint64_t>* used_blocks,
     bool is_alloc, //true when allocating, false when deallocating

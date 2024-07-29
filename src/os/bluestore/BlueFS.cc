@@ -1173,15 +1173,14 @@ int BlueFS::fsck()
   return 0;
 }
 
-int BlueFS::_write_super(int dev, bool wal_version)
+int BlueFS::_write_super(int dev, uint8_t wal_version)
 {
   ++super.version;
-  bool use_wal_v2 = cct->_conf.get_val<bool>("bluefs_wal_v2");
-  if (use_wal_v2) {
-    super.wal_version = 2;
-  }
   if (wal_version > 0) {
     super.wal_version = wal_version;
+  } else {
+    bool use_wal_v2 = cct->_conf.get_val<bool>("bluefs_wal_v2");
+    super.wal_version = use_wal_v2 ? 2 : 1;
   }
   // build superblock
   bufferlist bl;
