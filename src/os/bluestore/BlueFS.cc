@@ -4529,11 +4529,6 @@ int BlueFS::open_for_write(
     file = ceph::make_ref<File>();
     file->fnode.ino = ++ino_last;
     file->vselector_hint = vselector->get_hint_by_dir(dirname);
-    if (boost::algorithm::ends_with(filename, ".log") && cct->_conf.get_val<bool>("bluefs_wal_v2")) {
-        file->fnode.type = WAL_V2;
-        file->wal_marker = File::WALFlush::generate_hashed_marker(super.osd_uuid, file->fnode.ino);
-        file->is_wal_read_loaded = false;
-    }
     nodes.file_map[ino_last] = file;
     dir->file_map.emplace_hint(q, string{filename}, file);
     ++file->refs;
@@ -4566,23 +4561,14 @@ int BlueFS::open_for_write(
 	   << " vsel_hint " << file->vselector_hint
 	   << dendl;
 
-  log.t.op_file_update(file->fnode);
-  if (create) {
-    log.t.op_dir_link(dirname, filename, file->fnode.ino);
-  }
-
-  std::lock_guard dl(dirty.lock);
-  for (auto& p : pending_release_extents) {
-    dirty.pending_release[p.bdev].insert(p.offset, p.length);
-  }
-  }
-  *h = _create_writer(file);
-
-  if (boost::algorithm::ends_with(filename, ".log")) {
-    bool use_wal_v2 = cct->_conf.get_val<bool>("bluefs_wal_v2");
+	*h = _create_writer(file);
+	
+	if (boost::algorithm::ends_with(filename, ".log")) {
+	  bool use_wal_v2 = cct->_conf.get_val<bool>("bluefs_wal_v2");
     if (use_wal_v2) {
-        file->fnode.type = WAL_V2;
-        file->wal_marker = File::WALFlush::generate_hashed_marker(super.osd_uuid, file->fnode.ino);
+      file->fnode.type = WAL_V2;
+      file->is_wal_read_loaded = false;
+      file->wal_marker = File::WALFlush::generate_hashed_marker(super.osd_uuid, file->fnode.ino);
     }
     (*h)->writer_type = BlueFS::WRITER_WAL;
     if (logger && !overwrite) {
@@ -4594,6 +4580,18 @@ int BlueFS::open_for_write(
       logger->inc(l_bluefs_files_written_sst);
     }
   }
+  
+  log.t.op_file_update(file->fnode);
+  if (create) {
+    log.t.op_dir_link(dirname, filename, file->fnode.ino);
+  }
+
+  std::lock_guard dl(dirty.lock);
+  for (auto& p : pending_release_extents) {
+    dirty.pending_release[p.bdev].insert(p.offset, p.length);
+  }
+  }
+
 
   dout(10) << __func__ << " h " << *h << " on " << file->fnode << dendl;
   return 0;
