@@ -10278,7 +10278,7 @@ int BlueStore::migrate_wal_to_v1() {
     goto close_readonly;
   }
 
-  if (int r = _init_alloc(nullptr); r < 0) {
+  if (int r = _init_alloc(); r < 0) {
     goto close_fm;
     
   }
