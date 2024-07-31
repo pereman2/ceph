@@ -30,7 +30,7 @@ Synopsis
 | **ceph-bluestore-tool** reshard --path *osd path* --sharding *new sharding* [ --sharding-ctrl *control string* ]
 | **ceph-bluestore-tool** show-sharding --path *osd path*
 | **ceph-bluestore-tool** trim --path *osd path*
-| **ceph-bluestore-tool** migrate-wal-to-v1 --path *osd path*
+| **ceph-bluestore-tool** downgrade-wal-to-v1 --path *osd path*
 
 
 Description
@@ -140,7 +140,7 @@ Commands
    and allows the drive to perform more efficient internal housekeeping.
    If BlueStore runs with discard enabled, this option may not be useful.
    
-:command: `migrate-wal-to-v1` --path *osd path*
+:command: `downgrade-wal-to-v1` --path *osd path*
 
    Changes WAL disk format from the new version to the legacy one. Useful for downgrades, or if you
    might want to disable this new feature (bluefs_wal_v2).

@@ -1458,7 +1458,7 @@ TEST(BlueFS, test_wal_migrate) {
   // WAL files don't update internal extents while writing to save memory, only on _replay
   fs.umount();
   fs.mount();
-  fs.migrate_wal_to_v1();
+  fs.downgrade_wal_to_v1();
 
   BlueFS::FileReader *reader;
   ASSERT_EQ(0, fs.open_for_read(dir_db, wal_file, &reader));

@@ -10268,7 +10268,7 @@ int BlueStore::_fsck(BlueStore::FSCKDepth depth, bool repair)
   return _fsck_on_open(depth, repair);
 }
 
-int BlueStore::migrate_wal_to_v1() {
+int BlueStore::downgrade_wal_to_v1() {
   int r = _mount_readonly();
   if (r < 0) {
     goto out;
@@ -10282,7 +10282,7 @@ int BlueStore::migrate_wal_to_v1() {
     goto close_fm;
     
   }
-  r = bluefs->migrate_wal_to_v1();
+  r = bluefs->downgrade_wal_to_v1();
 
   _close_alloc();
 

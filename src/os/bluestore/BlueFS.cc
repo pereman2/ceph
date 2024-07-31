@@ -2133,7 +2133,7 @@ int BlueFS::device_migrate_to_new(
   return 0;
 }
 
-int BlueFS::migrate_wal_to_v1() {
+int BlueFS::downgrade_wal_to_v1() {
   _init_logger();
   string wal_dir("db.wal");
   auto dir_it = nodes.dir_map.find(wal_dir);

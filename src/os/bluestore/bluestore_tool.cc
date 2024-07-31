@@ -346,7 +346,7 @@ int main(int argc, char **argv)
         "reshard, "
         "show-sharding, "
        	"trim, "
-        "migrate-wal-to-v1")
+        "downgrade-wal-to-v1")
     ;
   po::options_description po_all("All options");
   po_all.add(po_options).add(po_positional);
@@ -656,7 +656,7 @@ int main(int argc, char **argv)
   else if (action == "fsck" ||
       action == "repair" ||
       action == "quick-fix" ||
-      action == "migrate-wal-to-v1") {
+      action == "downgrade-wal-to-v1") {
     validate_path(cct.get(), path, false);
     BlueStore bluestore(cct.get(), path);
     int r;
@@ -664,7 +664,7 @@ int main(int argc, char **argv)
       r = bluestore.fsck(fsck_deep);
     } else if (action == "repair") {
       r = bluestore.repair(fsck_deep);
-    } else if (action == "migrate-wal-to-v1") {
+    } else if (action == "downgrade-wal-to-v1") {
       r = bluestore.migrate_wal_to_v1();
     } else {
       r = bluestore.quick_fix();
