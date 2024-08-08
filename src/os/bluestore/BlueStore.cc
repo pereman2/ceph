@@ -26,6 +26,7 @@
 #include <boost/random/uniform_real.hpp>
 
 #include "common/dout.h"
+#include "include/ceph_assert.h"
 #include "include/cpp-btree/btree_set.h"
 
 #include "BlueStore.h"
@@ -5660,6 +5661,7 @@ BlueStore::BlueStore(CephContext *cct,
     throttle(cct),
     finisher(cct, "commit_finisher", "cfin"),
     kv_sync_thread(this),
+    kv_sync_companion_thread(this),
     kv_finalize_thread(this),
     min_alloc_size(_min_alloc_size),
     min_alloc_size_order(std::countr_zero(_min_alloc_size)),
@@ -14559,6 +14561,7 @@ void BlueStore::_kv_start()
 
   finisher.start();
   kv_sync_thread.create("bstore_kv_sync");
+  kv_sync_companion_thread.create("bstore_kv_syncc");
   kv_finalize_thread.create("bstore_kv_final");
 }
 
@@ -14567,11 +14570,13 @@ void BlueStore::_kv_stop()
   dout(10) << __func__ << dendl;
   {
     std::unique_lock l{kv_lock};
+    std::unique_lock companion_lock(kv_companion_lock);
     while (!kv_sync_started) {
       kv_cond.wait(l);
     }
     kv_stop = true;
     kv_cond.notify_all();
+    kv_companion_cond.notify_all();
   }
   {
     std::unique_lock l{kv_finalize_lock};
@@ -14582,6 +14587,7 @@ void BlueStore::_kv_stop()
     kv_finalize_cond.notify_all();
   }
   kv_sync_thread.join();
+  kv_sync_companion_thread.join();
   kv_finalize_thread.join();
   ceph_assert(removed_collections.empty());
   {
@@ -14596,6 +14602,44 @@ void BlueStore::_kv_stop()
   finisher.wait_for_empty();
   finisher.stop();
   dout(10) << __func__ << " stopped" << dendl;
+}
+
+void BlueStore::_kv_sync_companion_thread() {
+ 	// get kv_queue
+kv_queue_companion = nullptr;
+	while (true) {
+  	if (kv_stop) {
+     break;
+    }
+  	{
+      std::unique_lock l(kv_companion_lock);
+      kv_companion_cond.wait(l, [this] { return kv_queue_companion != nullptr || kv_stop; });
+      if (kv_stop) {
+        break;
+      }
+      
+     	for (auto txc : *kv_queue_companion) {
+        if (txc->ch->cid.hash_to_shard(2) == 0) {
+     			continue;
+      		}
+     	  throttle.log_state_latency(*txc, logger, l_bluestore_state_kv_queued_lat);
+      		if (txc->get_state() == TransContext::STATE_KV_QUEUED) {
+      		  _txc_apply_kv(txc, false);
+      		  --txc->osr->kv_committing_serially;
+      		} else {
+      	  	ceph_assert(txc->get_state() == TransContext::STATE_KV_SUBMITTED);
+      		}
+      		if (txc->had_ios) {
+      	  	--txc->osr->txc_with_unstable_io;
+      		}
+            }
+            
+     	// signal finished
+     	kv_queue_companion = nullptr;
+     	kv_queue_companion_finished_loop = true;
+      kv_companion_finish_cond.notify_one();
+   	}
+	}
 }
 
 void BlueStore::_kv_sync_thread()
@@ -14731,19 +14775,35 @@ void BlueStore::_kv_sync_thread()
 	dout(10) << __func__ << " new_blobid_max " << new_blobid_max << dendl;
       }
 
-      for (auto txc : kv_committing) {
-	throttle.log_state_latency(*txc, logger, l_bluestore_state_kv_queued_lat);
-	if (txc->get_state() == TransContext::STATE_KV_QUEUED) {
-	  ++kv_submitted;
-	  _txc_apply_kv(txc, false);
-	  --txc->osr->kv_committing_serially;
-	} else {
-	  ceph_assert(txc->get_state() == TransContext::STATE_KV_SUBMITTED);
-	}
-	if (txc->had_ios) {
-	  --txc->osr->txc_with_unstable_io;
-	}
-      }
+      {
+        {
+         	std::unique_lock l(kv_companion_lock);
+        	kv_queue_companion = &kv_committing;
+          kv_queue_companion_finished_loop = false;
+          kv_companion_cond.notify_one();
+        }
+        for (auto txc : kv_committing) {
+          if (txc->ch->cid.hash_to_shard(2) == 1) {
+            continue;
+          }
+          throttle.log_state_latency(*txc, logger, l_bluestore_state_kv_queued_lat);
+          if (txc->get_state() == TransContext::STATE_KV_QUEUED) {
+            ++kv_submitted;
+            _txc_apply_kv(txc, false);
+            --txc->osr->kv_committing_serially;
+          } else {
+            ceph_assert(txc->get_state() == TransContext::STATE_KV_SUBMITTED);
+          }
+          if (txc->had_ios) {
+            --txc->osr->txc_with_unstable_io;
+          }
+        }
+        {
+          // wait companion finishes
+          std::unique_lock l(kv_companion_lock);
+          kv_companion_finish_cond.wait(l, [this] { return kv_queue_companion_finished_loop; });
+        }
+  }
 
       // release throttle *before* we commit.  this allows new ops
       // to be prepared and enter pipeline while we are waiting on

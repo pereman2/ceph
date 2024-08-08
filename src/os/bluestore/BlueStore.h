@@ -2244,6 +2244,14 @@ public:
       return NULL;
     }
   };
+  struct KVSyncCompanionThread : public Thread {
+    BlueStore *store;
+    explicit KVSyncCompanionThread(BlueStore *s) : store(s) {}
+    void *entry() override {
+      store->_kv_sync_companion_thread();
+      return NULL;
+    }
+  };
   struct KVFinalizeThread : public Thread {
     BlueStore *store;
     explicit KVFinalizeThread(BlueStore *s) : store(s) {}
@@ -2331,6 +2339,14 @@ private:
   KVSyncThread kv_sync_thread;
   ceph::mutex kv_lock = ceph::make_mutex("BlueStore::kv_lock");
   ceph::condition_variable kv_cond;
+  
+  KVSyncCompanionThread kv_sync_companion_thread;
+  ceph::mutex kv_companion_lock = ceph::make_mutex("BlueStore::kv_companion_lock");
+  ceph::condition_variable kv_companion_cond;
+  ceph::condition_variable kv_companion_finish_cond;
+  std::deque<TransContext*>* kv_queue_companion;             ///< ready, already submitted
+  bool kv_queue_companion_finished_loop;
+  
   bool _kv_only = false;
   bool kv_sync_started = false;
   bool kv_stop = false;
@@ -2828,6 +2844,7 @@ private:
 
   void _kv_start();
   void _kv_stop();
+  void _kv_sync_companion_thread();
   void _kv_sync_thread();
   void _kv_finalize_thread();
 
